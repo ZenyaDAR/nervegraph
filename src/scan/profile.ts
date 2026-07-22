@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { NodeType } from '../graph/types.ts';
+import { langFor, type Lang } from './extensions.ts';
 
 export type Profile = 'shopify' | 'js';
 
@@ -15,9 +16,6 @@ export function detectProfile(root: string, forced?: string): { profile: Profile
   return { profile: 'js', warning: 'no known project type, falling back to js profile' };
 }
 
-const JS_EXT = ['.js', '.mjs', '.ts', '.jsx', '.tsx'];
-const CSS_EXT = ['.css', '.scss'];
-
 // Ordered rule tables, first match wins — directory convention takes
 // priority over extension. Adding a new shopify-like directory convention or
 // a new profile is a matter of adding one row, not touching the function body.
@@ -31,23 +29,35 @@ const SHOPIFY_RULES: [RegExp, NodeType][] = [
   [/^blocks\/.*\.liquid$/, 'block'],
 ];
 
-export function classifyNodeType(id: string, profile: Profile): NodeType {
-  const ext = path.extname(id).toLowerCase();
+// Every language that has a node type of its own. JS and TS deliberately share
+// one — the distinction is carried by the node's `lang`, and giving TypeScript
+// a separate color would split one concern across two hues in the viewer.
+const LANG_NODE_TYPE: Partial<Record<Lang, NodeType>> = {
+  javascript: 'javascript',
+  typescript: 'javascript',
+  html: 'html',
+  css: 'css',
+  python: 'python',
+  ruby: 'ruby',
+  rust: 'rust',
+  json: 'json',
+};
 
+export function classifyNodeType(id: string, profile: Profile): NodeType {
+  // Directory conventions win over extension: sections/foo.liquid is a
+  // `section`, not a generic liquid file.
   if (profile === 'shopify') {
     for (const [pattern, type] of SHOPIFY_RULES) if (pattern.test(id)) return type;
-    if (JS_EXT.includes(ext)) return 'javascript';
-    if (CSS_EXT.includes(ext)) return 'css';
-    if (/^assets\//.test(id)) return 'asset';
-    if (ext === '.json') return 'json';
-    return 'unknown';
   }
 
-  // js profile
-  if (JS_EXT.includes(ext)) return /^assets\//.test(id) ? 'javascript' : 'module';
-  if (CSS_EXT.includes(ext)) return 'css';
+  const lang = langFor(id);
+  const byLang = LANG_NODE_TYPE[lang];
+  if (byLang) return byLang;
+
+  // Images and vectors are assets wherever they live; other unrecognised
+  // files only count as assets under an assets/ directory convention.
+  if (lang === 'svg' || lang === 'image') return 'asset';
   if (/^assets\//.test(id)) return 'asset';
-  if (ext === '.json') return 'json';
   return 'unknown';
 }
 
@@ -74,10 +84,27 @@ export function isEntrypoint(id: string, profile: Profile, pkg?: any): boolean {
       for (const v of vals) if (typeof v === 'string' && normalize(v) === id) return true;
     }
   }
-  if (/^src\/(index|main)\.(ts|tsx|js|jsx|mjs)$/.test(id)) return true;
-  if (/^index\.(ts|tsx|js|jsx|mjs)$/.test(id)) return true;
-  return false;
+  return GENERIC_ENTRYPOINTS.some(re => re.test(id));
 }
+
+// Files a project is entered *through*, so nothing imports them and they'd
+// otherwise be flagged as orphans. Conventional names only — a heuristic that
+// guessed wider would mark half a Rails app as an entrypoint.
+const GENERIC_ENTRYPOINTS: RegExp[] = [
+  // JS / TS
+  /^(src\/)?(index|main)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/,
+  // HTML — the page the browser loads
+  /^(src\/|public\/)?index\.html?$/,
+  // Rust — crate roots and binary targets
+  /^(src\/)?(main|lib)\.rs$/,
+  /^src\/bin\/[^/]+\.rs$/,
+  // Python — scripts and package mains
+  /^(src\/)?(main|app|manage|setup|wsgi|asgi)\.py$/,
+  /^(.*\/)?__main__\.py$/,
+  // Ruby — Rails boot files and test harnesses
+  /^config\/(application|environment|routes|boot)\.rb$/,
+  /^(spec\/spec_helper|test\/test_helper)\.rb$/,
+];
 
 function flattenExports(exp: any): Record<string, string> {
   const out: Record<string, string> = {};

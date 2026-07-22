@@ -1,14 +1,37 @@
-export const SCHEMA_VERSION = 1;
+// 2: node type `module` folded into `javascript`; added `html`/`python`/
+// `ruby`/`rust` node types; split the Shopify `asset_url` convention out of
+// the path-shaped `asset` relation.
+export const SCHEMA_VERSION = 2;
 
-export type NodeType =
-  | 'layout' | 'template' | 'template_json' | 'section_group' | 'section'
-  | 'snippet' | 'block' | 'javascript' | 'css' | 'json' | 'asset'
-  | 'module' | 'unknown';
+// Declared as runtime arrays, with the TypeScript unions derived from them, so
+// that consumers (the viewer's color tables, the resolver registry) can be
+// checked against the real list instead of a hand-copied duplicate of it.
 
-export type RelType =
-  | 'render' | 'include' | 'section' | 'section_group' | 'template_section'
-  | 'asset' | 'content_for' | 'import' | 'require' | 'dynamic_import'
-  | 'css_import' | 'script_src' | 'link_href' | 'translation' | 'class_usage';
+export const NODE_TYPES = [
+  // Shopify theme conventions
+  'layout', 'template', 'template_json', 'section_group', 'section',
+  'snippet', 'block',
+  // language-generic
+  'javascript', 'html', 'css', 'python', 'ruby', 'rust',
+  'json', 'asset', 'unknown',
+] as const;
+
+export const REL_TYPES = [
+  // Shopify theme structure
+  'render', 'include', 'section', 'section_group', 'template_section',
+  'content_for', 'translation', 'asset_url',
+  // markup & resources
+  'asset', 'script_src', 'link_href', 'class_usage',
+  // JS/TS modules
+  'import', 'require', 'dynamic_import',
+  // CSS
+  'css_import',
+  // other languages
+  'py_import', 'rb_require', 'rb_require_relative', 'rust_mod',
+] as const;
+
+export type NodeType = typeof NODE_TYPES[number];
+export type RelType = typeof REL_TYPES[number];
 
 export type Risk = 'low' | 'medium' | 'high';
 
