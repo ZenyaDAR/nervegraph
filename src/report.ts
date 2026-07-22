@@ -1,9 +1,10 @@
 import type { Graph } from './graph/types.ts';
+import { VERSION } from './version.ts';
 
 export function printScanReport(graph: Graph, outPath: string, sizeBytes: number, quiet: boolean): void {
   if (quiet) return;
   const lines: string[] = [];
-  lines.push(`nervegraph 0.1.0 · profile: ${graph.profile}`);
+  lines.push(`nervegraph ${VERSION} · profile: ${graph.profile}`);
   lines.push('');
   lines.push(`  scanning  ${graph.root}`);
   lines.push(`  ✓ ${graph.stats.files} files`);

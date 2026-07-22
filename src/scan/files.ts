@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { TEXT_EXT } from './extensions.ts';
 
 const require = createRequire(import.meta.url);
 const ignoreLib: (options?: unknown) => { add(p: unknown): unknown; ignores(p: string): boolean } = require('ignore');
@@ -40,10 +41,6 @@ export interface FilesResult {
 function toPosix(p: string): string {
   return p.split(path.sep).join('/');
 }
-
-const TEXT_EXT = new Set([
-  '.liquid', '.json', '.js', '.mjs', '.ts', '.jsx', '.tsx', '.css', '.scss', '.html',
-]);
 
 export async function collectFiles(root: string, opts: {
   extraIgnore?: string[];

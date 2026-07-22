@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { existsSync, statSync } from 'node:fs';
 import { readGraph } from '../graph/io.ts';
+import { VERSION } from '../version.ts';
 import { createServer } from '../server.ts';
 import { SCHEMA_VERSION } from '../graph/types.ts';
 
@@ -51,7 +52,7 @@ export async function runView(args: ViewArgs): Promise<number> {
   const scannedAgoMs = Date.now() - new Date(graph.scannedAt).getTime();
   const scannedAgo = formatAgo(scannedAgoMs);
 
-  console.log('nervegraph 0.1.0');
+  console.log(`nervegraph ${VERSION}`);
   console.log('');
   console.log(`  graph   ${graphPath}  ·  ${graph.nodes.length} nodes · ${graph.edges.length} edges`);
   console.log(`  scanned ${scannedAgo}`);

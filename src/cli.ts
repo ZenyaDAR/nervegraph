@@ -2,8 +2,9 @@
 import { parseArgs } from 'node:util';
 import { runScan } from './commands/scan.ts';
 import { runView } from './commands/view.ts';
+import { VERSION } from './version.ts';
 
-const HELP = `nervegraph 0.1.0
+const HELP = `nervegraph ${VERSION}
 
 Usage:
   nerve scan   [path]  [flags]   Scan project, write .nervegraph/graph.json
