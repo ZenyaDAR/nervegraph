@@ -2,7 +2,7 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioning per [SemVer](https://semver.org/).
 
-## [0.2.0] — Unreleased
+## [0.2.0] — 2026-07-22
 
 Multi-language support. `graph.json` moves to **schema 2**; see "Changed" for
 the two breaking details.
