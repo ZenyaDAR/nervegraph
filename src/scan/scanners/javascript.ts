@@ -14,10 +14,6 @@ function truncate(s: string): string {
   return t.length > 120 ? t.slice(0, 120) : t;
 }
 
-function classify(target: string): 'import' | 'dynamic_import' {
-  return target ? 'import' : 'import';
-}
-
 export function scanJavaScript(file: { id: string; content: string }): ScannerResult {
   const refs: RawRef[] = [];
   const exports: string[] = [];

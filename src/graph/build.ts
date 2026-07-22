@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { collectFiles, hashContent, type ScannedFile } from '../scan/files.ts';
 import { detectProfile, classifyNodeType, isEntrypoint } from '../scan/profile.ts';
+import { langFor } from '../scan/extensions.ts';
+import { VERSION } from '../version.ts';
 import { findLanguage } from '../scan/languages/index.ts';
 import { resolveRefs } from './resolve.ts';
 import type { Graph, GraphNode, GraphEdge, UnresolvedRef, Warning, RawRef, Risk } from './types.ts';
@@ -50,20 +52,21 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
 
   const fileById = new Map<string, ScannedFile>();
   for (const f of files) fileById.set(f.id, f);
-  for (const b of binaryLeaves) {
-    // present on disk but not content-scanned; may become a node if referenced
-  }
 
+  // Binary leaves are on disk but never content-scanned; they only become
+  // nodes if something references them (or below, unconditionally as leaves).
   const existingIds = new Set<string>([...fileById.keys(), ...binaryLeaves.map(b => b.id)]);
-  const existingLower = new Set<string>([...existingIds].map(s => s.toLowerCase()));
+  // Case-insensitive index built once. Resolving a reference whose case
+  // doesn't match the file on disk used to scan every id, making a
+  // case-sloppy repo O(files x refs).
+  const byLowerId = new Map<string, string>();
+  for (const id of existingIds) byLowerId.set(id.toLowerCase(), id);
+
   function fileExists(id: string): boolean {
-    return existingLower.has(id.toLowerCase());
+    return byLowerId.has(id.toLowerCase());
   }
   function realId(id: string): string {
-    if (existingIds.has(id)) return id;
-    const lower = id.toLowerCase();
-    for (const e of existingIds) if (e.toLowerCase() === lower) return e;
-    return id;
+    return byLowerId.get(id.toLowerCase()) ?? id;
   }
 
   const nodes = new Map<string, GraphNode>();
@@ -94,7 +97,8 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
     }
 
     const outcome = resolveRefs(file.id, refs, { profile, fileExists, defaultLocale });
-    for (const e of outcome.edges) edges.push({ ...e, to: realId(e.to) });
+    const fileEdges = dedupeEdges(outcome.edges.map(e => ({ ...e, to: realId(e.to) })));
+    edges.push(...fileEdges);
     unresolved.push(...outcome.unresolved);
     for (const m of outcome.missingTargets) missingIds.add(m);
 
@@ -106,7 +110,7 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
       loc: countLoc(file.content),
       hash: hashContent(file.content),
       in: 0,
-      out: outcome.edges.length,
+      out: fileEdges.length,
       risk: 'low',
       orphan: false,
       entrypoint: isEntrypoint(file.id, profile, pkg),
@@ -177,7 +181,7 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
 
   const graph: Graph = {
     schemaVersion: SCHEMA_VERSION,
-    tool: 'nervegraph@0.1.0',
+    tool: `nervegraph@${VERSION}`,
     root,
     profile,
     scannedAt: new Date().toISOString(),
@@ -198,43 +202,77 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
   return graph;
 }
 
-function langFor(id: string): string {
-  const ext = path.extname(id).toLowerCase();
-  if (ext === '.liquid') return 'liquid';
-  if (['.js', '.mjs', '.jsx'].includes(ext)) return 'javascript';
-  if (['.ts', '.tsx'].includes(ext)) return 'javascript';
-  if (['.css', '.scss'].includes(ext)) return 'css';
-  if (ext === '.json') return 'json';
-  if (ext === '.svg') return 'svg';
-  if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) return 'image';
-  return 'other';
+/**
+ * Drop references that land on the same target, relation *and* line. One
+ * source line can legitimately yield several refs to one file — `from pkg
+ * import a, b` is the common case — and they'd otherwise show up as parallel
+ * edges the viewer draws on top of each other.
+ */
+function dedupeEdges(list: GraphEdge[]): GraphEdge[] {
+  const seen = new Set<string>();
+  return list.filter(e => {
+    const key = `${e.to}\0${e.rel}\0${e.line}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
+/**
+ * Report dependency cycles, naming the files involved — "dependency cycle
+ * detected" with no location left the user grepping by hand.
+ *
+ * Iterative rather than recursive: a deep import chain (a 10k-file monorepo
+ * barrel) overflowed the call stack, which crashed the whole scan.
+ */
 function detectCycles(nodes: Map<string, GraphNode>, edges: GraphEdge[], warnings: Warning[]) {
   const adj = new Map<string, string[]>();
   for (const e of edges) {
     if (!adj.has(e.from)) adj.set(e.from, []);
     adj.get(e.from)!.push(e.to);
   }
+
   const WHITE = 0, GRAY = 1, BLACK = 2;
   const color = new Map<string, number>();
-  let found = false;
+  const cycles: string[][] = [];
 
-  function dfs(u: string): boolean {
-    color.set(u, GRAY);
-    for (const v of adj.get(u) ?? []) {
+  for (const root of nodes.keys()) {
+    if ((color.get(root) ?? WHITE) !== WHITE) continue;
+    // Explicit stack of (node, index of next neighbour to visit) plus the
+    // current DFS path, so a back-edge can name the cycle it closes.
+    const stack: { id: string; next: number }[] = [{ id: root, next: 0 }];
+    const path: string[] = [root];
+    color.set(root, GRAY);
+
+    while (stack.length) {
+      const top = stack[stack.length - 1];
+      const neighbours = adj.get(top.id) ?? [];
+      if (top.next >= neighbours.length) {
+        color.set(top.id, BLACK);
+        stack.pop();
+        path.pop();
+        continue;
+      }
+      const v = neighbours[top.next++];
       const c = color.get(v) ?? WHITE;
-      if (c === GRAY) return true;
-      if (c === WHITE && dfs(v)) return true;
+      if (c === GRAY) {
+        const start = path.lastIndexOf(v);
+        if (start >= 0 && cycles.length < MAX_REPORTED_CYCLES) cycles.push([...path.slice(start), v]);
+        continue;
+      }
+      if (c === WHITE) {
+        color.set(v, GRAY);
+        stack.push({ id: v, next: 0 });
+        path.push(v);
+      }
     }
-    color.set(u, BLACK);
-    return false;
   }
 
-  for (const id of nodes.keys()) {
-    if ((color.get(id) ?? WHITE) === WHITE) {
-      if (dfs(id)) { found = true; break; }
-    }
+  for (const cycle of cycles) {
+    warnings.push({ code: 'cycle', file: cycle[0], message: `dependency cycle: ${cycle.join(' -> ')}` });
   }
-  if (found) warnings.push({ code: 'cycle', file: '', message: 'dependency cycle detected' });
 }
+
+// A tangled project can contain thousands of cycles; past a handful the list
+// stops being actionable and just bloats graph.json.
+const MAX_REPORTED_CYCLES = 20;
