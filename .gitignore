@@ -1,0 +1,11 @@
+.omc/
+docs/
+node_modules/
+dist/
+.nervegraph/
+coverage/
+*.tsbuildinfo
+*.log
+.env
+.env.*
+.DS_Store

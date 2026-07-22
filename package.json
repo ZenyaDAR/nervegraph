@@ -1,0 +1,24 @@
+{
+  "name": "nervegraph",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "nerve": "./dist/cli.js" },
+  "engines": { "node": ">=20" },
+  "files": ["dist", "viewer"],
+  "dependencies": {
+    "fast-glob": "^3",
+    "es-module-lexer": "^1",
+    "postcss": "^8",
+    "ignore": "^5"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "@types/node": "^20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test --experimental-strip-types test/**/*.test.ts",
+    "dev": "tsc --watch"
+  }
+}

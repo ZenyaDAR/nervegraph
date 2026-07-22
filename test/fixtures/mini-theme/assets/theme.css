@@ -1,0 +1,3 @@
+@import "base.css";
+.product-card { border: 1px solid #ccc; }
+.price { font-weight: bold; }

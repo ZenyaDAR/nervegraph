@@ -1,0 +1,101 @@
+/* Roles and values documented in COLOR_SCHEME.md — change there first. */
+:root {
+  --page: #0d0d0d;
+  --canvas-bg: #1a1a19;
+  --border: rgba(255, 255, 255, 0.10);
+  --text: #ffffff;
+  --text-dim: #c3c2b7;
+  --text-muted: #898781;
+  --accent: #3987e5;
+  --status-warning: #fab219;
+  --status-critical: #d03b3b;
+  --label-pill-bg: rgba(26, 26, 25, 0.78);
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --page: #f9f9f7;
+    --canvas-bg: #fcfcfb;
+    --border: rgba(11, 11, 11, 0.10);
+    --text: #0b0b0b;
+    --text-dim: #52514e;
+    --text-muted: #898781;
+    --accent: #2a78d6;
+    --status-warning: #fab219;
+    --status-critical: #d03b3b;
+    --label-pill-bg: rgba(252, 252, 251, 0.82);
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--page); color: var(--text); font: 13px/1.4 -apple-system, Segoe UI, sans-serif; }
+button { font: inherit; }
+
+#topbar {
+  height: 48px; display: flex; align-items: center; gap: 12px; padding: 0 12px;
+  background: var(--page); border-bottom: 1px solid var(--border);
+}
+#brand { font-weight: 700; }
+#root-name { color: var(--text-dim); }
+#counts { color: var(--text-dim); margin-right: auto; }
+#search { background: var(--canvas-bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 10px; width: 240px; }
+#search:focus { outline: none; border-color: var(--accent); }
+#refresh-btn { background: none; border: 1px solid var(--border); color: var(--text); border-radius: 6px; cursor: pointer; padding: 4px 10px; }
+
+#layout { display: flex; height: calc(100vh - 48px - 32px); }
+
+#filters {
+  width: 220px; background: var(--page); border-right: 1px solid var(--border);
+  overflow-y: auto; flex-shrink: 0; padding: 10px;
+}
+#filters h2 { font-size: 11px; text-transform: uppercase; color: var(--text-dim); margin: 14px 0 6px; }
+#filters label { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; }
+#filters-toggle { display: none; }
+
+/* Type identity is never color-only: this swatch always sits beside the
+   type's name (filter list, detail panel) so color is a reinforcement, not
+   the sole encoding. See docs/05-viewer.md §5.9 / COLOR_SCHEME.md. */
+.type-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+
+#canvas-wrap { flex: 1; position: relative; min-width: 0; background: var(--canvas-bg); }
+#graph { position: absolute; inset: 0; }
+#perf-banner {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  background: var(--status-critical); color: #ffffff; padding: 4px 12px; border-radius: 6px; font-size: 12px;
+}
+
+#details {
+  width: 320px; background: var(--page); border-left: 1px solid var(--border);
+  overflow-y: auto; flex-shrink: 0; padding: 14px; position: relative;
+}
+#details.closed { display: none; }
+#details-close { position: absolute; top: 10px; right: 10px; background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; }
+#details .hint { color: var(--text-dim); }
+#details h3 { margin: 0 24px 4px 0; word-break: break-all; font-size: 14px; }
+#details .type-line { color: var(--text-dim); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+#details .risk-box { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 10px 0; display: flex; justify-content: space-between; }
+#details .risk-box.high { border-color: var(--status-critical); }
+#details .risk-box.medium { border-color: var(--status-warning); }
+#details .risk-box.missing { border-color: var(--status-critical); color: var(--status-critical); }
+#details .section-title { font-size: 11px; text-transform: uppercase; color: var(--text-dim); margin: 14px 0 6px; }
+#details .ref-item { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; cursor: pointer; }
+#details .ref-item:hover { border-color: var(--accent); }
+#details .ref-item .ref-file { word-break: break-all; }
+#details .ref-item .ref-meta { color: var(--text-dim); font-size: 11px; }
+#details .ref-item .ref-raw { font-family: ui-monospace, monospace; font-size: 11px; color: var(--text-dim); margin-top: 4px; word-break: break-all; }
+#details .more-btn { background: none; border: none; color: var(--accent); cursor: pointer; padding: 4px 0; }
+#details .actions { display: flex; gap: 8px; margin-top: 12px; }
+#details .actions button { flex: 1; background: var(--canvas-bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px; cursor: pointer; }
+
+#statusbar {
+  height: 32px; display: flex; align-items: center; gap: 16px; padding: 0 12px;
+  background: var(--page); border-top: 1px solid var(--border); color: var(--text-dim); font-size: 12px;
+}
+#mode-indicator { font-weight: 600; color: var(--text); }
+
+@media (max-width: 900px) {
+  #filters, #details { position: absolute; top: 0; bottom: 0; z-index: 10; }
+  #filters { left: 0; transform: translateX(-100%); transition: transform .15s; }
+  #filters.open { transform: translateX(0); }
+  #details { right: 0; }
+  #filters-toggle { display: block; position: absolute; top: 8px; right: -34px; background: var(--page); border: 1px solid var(--border); color: var(--text); }
+}

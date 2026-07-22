@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>nervegraph</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header id="topbar">
+    <span id="brand">nervegraph</span>
+    <span id="root-name"></span>
+    <span id="counts"></span>
+    <input id="search" type="text" placeholder="⌕ search  (/ or Ctrl+K)" autocomplete="off">
+    <button id="refresh-btn" title="reload graph.json">⟳</button>
+  </header>
+
+  <main id="layout">
+    <aside id="filters">
+      <button id="filters-toggle" class="panel-toggle" aria-label="toggle filters">☰</button>
+      <div id="filters-body">
+        <h2>Types</h2>
+        <div id="type-filters"></div>
+        <h2>Relations</h2>
+        <div id="rel-filters"></div>
+        <h2>Show</h2>
+        <label><input type="checkbox" id="only-orphans"> only orphans <span id="count-orphans"></span></label>
+        <label><input type="checkbox" id="only-risk"> only high risk <span id="count-risk"></span></label>
+        <label><input type="checkbox" id="only-missing"> only missing <span id="count-missing"></span></label>
+      </div>
+    </aside>
+
+    <div id="canvas-wrap">
+      <div id="graph"></div>
+      <div id="perf-banner" hidden></div>
+    </div>
+
+    <aside id="details">
+      <button id="details-close" aria-label="close">✕</button>
+      <div id="details-body"><p class="hint">Click a node to see its details.</p></div>
+    </aside>
+  </main>
+
+  <footer id="statusbar">
+    <span id="mode-indicator">galaxy</span>
+    <span id="status-mid"></span>
+    <span id="status-right"></span>
+  </footer>
+
+  <script src="/vendor/force-graph.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
