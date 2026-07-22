@@ -1,7 +1,7 @@
 {
   "name": "nervegraph",
-  "version": "0.1.0",
-  "description": "Obsidian Graph View, but for source code — scan a Shopify theme (or JS/TS project) into a dependency graph and browse it interactively.",
+  "version": "0.2.0",
+  "description": "Obsidian Graph View, but for source code — scan a JS/TS, HTML/CSS, Python, Ruby, Rust or Shopify Liquid project into a dependency graph and browse it interactively.",
   "type": "module",
   "license": "MIT",
   "author": "Yevhenii Dziza",
@@ -14,14 +14,24 @@
     "url": "https://github.com/ZenyaDAR/nervegraph/issues"
   },
   "keywords": [
-    "shopify",
-    "liquid",
     "dependency-graph",
     "graph",
     "static-analysis",
+    "visualization",
+    "code-visualization",
+    "codebase",
+    "architecture",
     "cli",
-    "theme",
-    "visualization"
+    "javascript",
+    "typescript",
+    "html",
+    "css",
+    "python",
+    "ruby",
+    "rust",
+    "shopify",
+    "liquid",
+    "theme"
   ],
   "bin": { "nerve": "dist/cli.js" },
   "engines": { "node": ">=22.6" },
@@ -37,8 +47,11 @@
     "@types/node": "^20"
   },
   "scripts": {
+    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-strip-types test/**/*.test.ts",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   }
 }

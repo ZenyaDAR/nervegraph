@@ -13,10 +13,17 @@ file; if you change a color, change it here first, re-validate, then apply.
   assigned to one node-type group. The order is the colorblind-safety
   mechanism — it's what got validated, so slots keep their hue even if you
   relabel which node type sits in which slot.
-- **`asset`/`module`/`unknown` = "Other," not a 9th hue.** The method is
+- **`asset`/`unknown` = "Other," not a 9th hue.** The method is
   explicit that a 9th category should never be a freshly generated hue — it
-  folds into a neutral. These three types are exactly that: files nervegraph
+  folds into a neutral. These two types are exactly that: files nervegraph
   doesn't have a structural opinion about. They get muted ink gray.
+- **Languages share slots with Shopify types they can't co-occur with.**
+  `python`, `ruby`, `rust` and `html` reuse the hues of `section`, `block`,
+  `snippet` and `layout` rather than inventing new ones, because the Shopify
+  types only exist under the `shopify` profile and the language types only
+  appear in projects that contain those languages. This keeps the validated
+  8-slot order intact — no re-validation is needed to add a language, only a
+  check that the new type can't realistically share a graph with its slot-mate.
 - **Risk = status (state), not categorical.** Status colors are a small fixed
   scale with reserved meaning (good → warning → critical) that must stay
   visually distinct from the 8 category hues so a risk badge never reads as
@@ -54,15 +61,19 @@ alone. Dark mode clears 3:1 contrast on all 8 slots outright.
 
 | Slot | Hue | Light | Dark | Node types |
 |---|---|---|---|---|
-| 1 | blue | `#2a78d6` | `#3987e5` | `section`, `section_group` |
-| 2 | orange | `#eb6834` | `#d95926` | `layout` |
-| 3 | aqua | `#1baf7a` | `#199e70` | `snippet` |
-| 4 | yellow | `#eda100` | `#c98500` | `javascript` |
+| 1 | blue | `#2a78d6` | `#3987e5` | `section`, `section_group`, `python` |
+| 2 | orange | `#eb6834` | `#d95926` | `layout`, `html` |
+| 3 | aqua | `#1baf7a` | `#199e70` | `snippet`, `rust` |
+| 4 | yellow | `#eda100` | `#c98500` | `javascript` (JS **and** TS) |
 | 5 | magenta | `#e87ba4` | `#d55181` | `template`, `template_json` |
-| 6 | green | `#008300` | `#008300` | `block` |
+| 6 | green | `#008300` | `#008300` | `block`, `ruby` |
 | 7 | violet | `#4a3aa7` | `#9085e9` | `css` |
 | 8 | red | `#e34948` | `#e66767` | `json` |
-| — | other (gray) | `#898781` | `#898781` | `asset`, `module`, `unknown` |
+| — | other (gray) | `#898781` | `#898781` | `asset`, `unknown` |
+
+TypeScript deliberately shares the `javascript` slot: the distinction is carried
+by the node's `lang` field, and splitting one concern across two hues would
+spend a scarce categorical slot on a compile-target difference.
 
 Slot order is fixed — if a 9th real category ever earns its own hue (unlikely;
 see "Other" above), don't insert it into the middle of this list. Re-run the
@@ -86,11 +97,15 @@ color chip.
 
 | Group | Rel types | Dark | Light | Style |
 |---|---|---|---|---|
-| structural | `render`, `include`, `section`, `section_group`, `template_section`, `content_for` | `#4a5568` | `#9096a6` | solid |
-| code | `import`, `require`, `dynamic_import`, `css_import` | `#5a6478` | `#9aa3b8` | dashed |
-| resource | `asset`, `script_src`, `link_href` | `#3f4a5a` | `#7c8794` | solid |
+| structural | `render`, `include`, `section`, `section_group`, `template_section`, `content_for`, `rust_mod` | `#4a5568` | `#9096a6` | solid |
+| code | `import`, `require`, `dynamic_import`, `css_import`, `py_import`, `rb_require`, `rb_require_relative` | `#5a6478` | `#9aa3b8` | dashed |
+| resource | `asset`, `asset_url`, `script_src`, `link_href` | `#3f4a5a` | `#7c8794` | solid |
 | class usage | `class_usage` | `#4a4458` | `#9b8fae` | thin dashed |
 | translation | `translation` | `#3f4a5a` | `#7c8794` | solid, hidden by default |
+
+`rust_mod` is grouped as **structural**, not code: `mod foo;` is what pulls a
+file into the crate, so it defines the module tree the way a Liquid `render`
+defines page structure. `py_import`/`rb_require` are ordinary code imports.
 
 ## UI chrome & ink
 
