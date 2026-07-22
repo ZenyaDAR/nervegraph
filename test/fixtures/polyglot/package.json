@@ -1,0 +1,6 @@
+{
+  "name": "polyglot-fixture",
+  "private": true,
+  "type": "module",
+  "main": "app.js"
+}

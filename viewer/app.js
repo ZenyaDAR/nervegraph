@@ -3,26 +3,26 @@
 (() => {
   const TYPE_COLOR = {
     dark: {
-      section: '#3987e5', section_group: '#3987e5',
-      layout: '#d95926',
-      snippet: '#199e70',
+      section: '#3987e5', section_group: '#3987e5', python: '#3987e5',
+      layout: '#d95926', html: '#d95926',
+      snippet: '#199e70', rust: '#199e70',
       javascript: '#c98500',
       template: '#d55181', template_json: '#d55181',
-      block: '#008300',
+      block: '#008300', ruby: '#008300',
       css: '#9085e9',
       json: '#e66767',
-      asset: '#898781', module: '#898781', unknown: '#898781',
+      asset: '#898781', unknown: '#898781',
     },
     light: {
-      section: '#2a78d6', section_group: '#2a78d6',
-      layout: '#eb6834',
-      snippet: '#1baf7a',
+      section: '#2a78d6', section_group: '#2a78d6', python: '#2a78d6',
+      layout: '#eb6834', html: '#eb6834',
+      snippet: '#1baf7a', rust: '#1baf7a',
       javascript: '#eda100',
       template: '#e87ba4', template_json: '#e87ba4',
-      block: '#008300',
+      block: '#008300', ruby: '#008300',
       css: '#4a3aa7',
       json: '#e34948',
-      asset: '#898781', module: '#898781', unknown: '#898781',
+      asset: '#898781', unknown: '#898781',
     },
   };
 
@@ -30,23 +30,32 @@
     dark: {
       render: '#4a5568', include: '#4a5568', section: '#4a5568',
       section_group: '#4a5568', template_section: '#4a5568', content_for: '#4a5568',
+      rust_mod: '#4a5568',
       import: '#5a6478', require: '#5a6478', dynamic_import: '#5a6478', css_import: '#5a6478',
-      asset: '#3f4a5a', script_src: '#3f4a5a', link_href: '#3f4a5a',
+      py_import: '#5a6478', rb_require: '#5a6478', rb_require_relative: '#5a6478',
+      asset: '#3f4a5a', asset_url: '#3f4a5a', script_src: '#3f4a5a', link_href: '#3f4a5a',
       class_usage: '#4a4458',
       translation: '#3f4a5a',
     },
     light: {
       render: '#9096a6', include: '#9096a6', section: '#9096a6',
       section_group: '#9096a6', template_section: '#9096a6', content_for: '#9096a6',
+      rust_mod: '#9096a6',
       import: '#9aa3b8', require: '#9aa3b8', dynamic_import: '#9aa3b8', css_import: '#9aa3b8',
-      asset: '#7c8794', script_src: '#7c8794', link_href: '#7c8794',
+      py_import: '#9aa3b8', rb_require: '#9aa3b8', rb_require_relative: '#9aa3b8',
+      asset: '#7c8794', asset_url: '#7c8794', script_src: '#7c8794', link_href: '#7c8794',
       class_usage: '#9b8fae',
       translation: '#7c8794',
     },
   };
 
   const STATUS_CRITICAL = '#d03b3b';
-  const DASHED_RELS = new Set(['import', 'require', 'dynamic_import', 'css_import', 'class_usage']);
+  // Code-level imports are dashed; structural inclusion (Liquid render, Rust
+  // `mod`) stays solid, because it defines the file tree rather than using it.
+  const DASHED_RELS = new Set([
+    'import', 'require', 'dynamic_import', 'css_import', 'class_usage',
+    'py_import', 'rb_require', 'rb_require_relative',
+  ]);
   // Mirrors app.css's `@media (prefers-color-scheme: light)` block exactly:
   // light only when explicitly matched, dark otherwise (the project default,
   // including the "no preference reported" case — see docs/05-viewer.md §5.8).

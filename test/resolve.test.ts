@@ -12,7 +12,7 @@ test('shopify: render/section/asset resolve to conventional paths', () => {
   const refs: RawRef[] = [
     { rel: 'render', target: 'price', line: 1, raw: '', literal: true },
     { rel: 'section', target: 'header', line: 2, raw: '', literal: true },
-    { rel: 'asset', target: 'cart.js', line: 3, raw: '', literal: true },
+    { rel: 'asset_url', target: 'cart.js', line: 3, raw: '', literal: true },
   ];
   const out = resolveRefs('sections/x.liquid', refs, ctx(['snippets/price.liquid', 'sections/header.liquid', 'assets/cart.js']));
   assert.deepEqual(out.edges.map(e => e.to), ['snippets/price.liquid', 'sections/header.liquid', 'assets/cart.js']);
@@ -58,14 +58,14 @@ test('css_import inside assets/ resolves relative to the file even without profi
 });
 
 test('a missing .min asset falls back to the unminified source', () => {
-  const refs: RawRef[] = [{ rel: 'asset', target: 'product-form.min.js', line: 1, raw: '', literal: true }];
+  const refs: RawRef[] = [{ rel: 'asset_url', target: 'product-form.min.js', line: 1, raw: '', literal: true }];
   const out = resolveRefs('sections/x.liquid', refs, ctx(['assets/product-form.js']));
   assert.equal(out.edges[0].to, 'assets/product-form.js');
   assert.equal(out.missingTargets.size, 0);
 });
 
 test('a missing .min asset with no unminified source is still reported missing', () => {
-  const refs: RawRef[] = [{ rel: 'asset', target: 'vendor.min.js', line: 1, raw: '', literal: true }];
+  const refs: RawRef[] = [{ rel: 'asset_url', target: 'vendor.min.js', line: 1, raw: '', literal: true }];
   const out = resolveRefs('sections/x.liquid', refs, ctx([]));
   assert.equal(out.edges[0].to, 'assets/vendor.min.js');
   assert.ok(out.missingTargets.has('assets/vendor.min.js'));

@@ -43,7 +43,7 @@ test('render with append is unresolved/concatenated', () => {
 
 test('asset_url and asset_img_url', () => {
   const r = refs(`{{ 'cart.js' | asset_url }} {{ 'logo.png' | asset_img_url: '100x' }}`);
-  assert.deepEqual(r.map(x => [x.rel, x.target]), [['asset', 'cart.js'], ['asset', 'logo.png']]);
+  assert.deepEqual(r.map(x => [x.rel, x.target]), [['asset_url', 'cart.js'], ['asset_url', 'logo.png']]);
 });
 
 test('render inside {% liquid %} block', () => {
