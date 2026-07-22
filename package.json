@@ -4,7 +4,7 @@
   "type": "module",
   "license": "MIT",
   "bin": { "nerve": "./dist/cli.js" },
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=22.6" },
   "files": ["dist", "viewer"],
   "dependencies": {
     "fast-glob": "^3",
