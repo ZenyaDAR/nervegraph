@@ -1,9 +1,29 @@
 {
   "name": "nervegraph",
   "version": "0.1.0",
+  "description": "Obsidian Graph View, but for source code — scan a Shopify theme (or JS/TS project) into a dependency graph and browse it interactively.",
   "type": "module",
   "license": "MIT",
-  "bin": { "nerve": "./dist/cli.js" },
+  "author": "Yevhenii Dziza",
+  "homepage": "https://github.com/ZenyaDAR/nervegraph#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZenyaDAR/nervegraph.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ZenyaDAR/nervegraph/issues"
+  },
+  "keywords": [
+    "shopify",
+    "liquid",
+    "dependency-graph",
+    "graph",
+    "static-analysis",
+    "cli",
+    "theme",
+    "visualization"
+  ],
+  "bin": { "nerve": "dist/cli.js" },
   "engines": { "node": ">=22.6" },
   "files": ["dist", "viewer"],
   "dependencies": {

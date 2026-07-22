@@ -1,11 +1,11 @@
 # Changelog
 
-Формат по [Keep a Changelog](https://keepachangelog.com/), версии по [SemVer](https://semver.org/).
+Format based on [Keep a Changelog](https://keepachangelog.com/), versioning per [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
 ### Added
-- Первая версия: `nerve scan` строит граф зависимостей Shopify-темы (Liquid/JSON/JS/CSS) в `.nervegraph/graph.json`.
-- `nerve view` — интерактивный просмотр графа в браузере (force-graph).
-- Резолверы путей для Shopify-конвенций и generic JS/CSS.
-- CI: прогон тестов на push/PR в GitHub Actions.
+- First version: `nerve scan` builds a Shopify theme's dependency graph (Liquid/JSON/JS/CSS) into `.nervegraph/graph.json`.
+- `nerve view` — interactive graph browser (force-graph).
+- Path resolvers for Shopify conventions and generic JS/CSS.
+- CI: test run on push/PR via GitHub Actions.

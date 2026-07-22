@@ -10,16 +10,16 @@ npm test
 
 ## Workflow
 
-1. Ветка от `main`.
-2. Изменения + тесты на новую логику (`test/**/*.test.ts`, `node --test`).
-3. `npm run build` и `npm test` должны проходить локально — тот же прогон делает CI.
-4. PR с коротким описанием, что и зачем.
+1. Branch off `main`.
+2. Changes + tests for new logic (`test/**/*.test.ts`, `node --test`).
+3. `npm run build` and `npm test` must pass locally — CI runs the same check.
+4. PR with a short description of what and why.
 
-## Структура
+## Structure
 
-Архитектура и решения по стеку — в [README.md](README.md) и [docs/06-architecture.md](docs/06-architecture.md).
-Как добавить новый язык/резолвер — в [EXTENDING.md](EXTENDING.md).
+Architecture and stack decisions — in [README.md](README.md).
+How to add a new language/resolver — in [EXTENDING.md](EXTENDING.md).
 
-## Коммиты
+## Commits
 
-Обычный формат `type: what` (`fix: ...`, `feat: ...`, `test: ...`) — без строгого enforce, но старайтесь быть последовательными с историей репозитория.
+Plain `type: what` format (`fix: ...`, `feat: ...`, `test: ...`) — not strictly enforced, but try to stay consistent with the repo's history.

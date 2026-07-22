@@ -22,7 +22,7 @@ file; if you change a color, change it here first, re-validate, then apply.
   visually distinct from the 8 category hues so a risk badge never reads as
   "series 9." Always paired with the text label (`RISK HIGH`, not color alone).
 - **Relation-line colors are deliberately outside the categorical system.**
-  Edges recede on purpose (see docs/05-viewer.md §5.2 — "приглушённее узлов")
+  Edges recede on purpose (see docs/05-viewer.md §5.2 — "more muted than nodes")
   and are already differentiated by line style (solid vs dashed) as well as
   color, so they don't need to clear the same CVD bar as node identity. They're
   muted slate variants, listed below for completeness but not run through the
