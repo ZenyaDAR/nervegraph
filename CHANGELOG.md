@@ -2,6 +2,42 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioning per [SemVer](https://semver.org/).
 
+## [0.2.1] — 2026-07-22
+
+Bug fixes from a full review of the 0.2.0 code. No schema change.
+
+### Fixed
+- **CI ran 55 of 136 tests.** The test script's `test/**/*.test.ts` was left
+  unquoted, so `sh` — which has no globstar — collapsed it to `test/*/*.test.ts`
+  and ran only `test/scanners/`. Every top-level suite was silently skipped, on
+  `npm test` and, through `prepublishOnly`, on publish. Invisible on Windows,
+  where npm's `cmd.exe` doesn't glob and Node expanded the pattern correctly.
+- Two files whose paths differ only in case (`src/Utils.js`, `src/utils.js`)
+  collided in the case-insensitive id index, and every reference to one was
+  rewritten onto the other. Colliding ids are now left alone; case-sloppy
+  references to non-colliding files are still repaired.
+- `loc` counted one extra line for every file ending in a newline — which is
+  nearly all of them.
+- The scan report's artifact size was measured on compact JSON while the file is
+  written indented, understating it by roughly half.
+- The viewer showed a blank page when `graph.json` was missing or truncated: the
+  server's plain-text hint was parsed as JSON and the rejection went unhandled.
+  It now surfaces the server's message.
+- The large-graph banner claimed assets were hidden while they were still drawn
+  and their checkbox still read checked; it ran after the UI and graph were
+  already built.
+- Link width read a `_count` that was never assigned, so every link drew at
+  width 1 and repeated references between the same pair of files stacked as
+  overlapping lines. They now collapse to one link, widened by their count.
+- Hovering a node recomputed the neighbour sets by scanning the whole edge list
+  once per node per frame; they are now cached on the active node.
+- Removed `writeMetaAtomic` and `FileMeta`, which had no callers, along with the
+  `.gitignore` each scan wrote for the `meta.json` they never produced.
+- `lineAt`/`truncate` were re-implemented in the JavaScript and CSS scanners
+  instead of imported from `scanners/util.ts`, hardcoding the `RAW_MAX` cap that
+  the other three scanners read from one place.
+- `package-lock.json` still declared 0.1.0 after the 0.2.0 release.
+
 ## [0.2.0] — 2026-07-22
 
 Multi-language support. `graph.json` moves to **schema 2**; see "Changed" for

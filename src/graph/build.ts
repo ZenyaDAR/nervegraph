@@ -19,7 +19,10 @@ export interface ScanOptions {
 
 function countLoc(content: string): number {
   if (content.length === 0) return 0;
-  return content.split('\n').length;
+  // A file's final newline terminates its last line, it doesn't start a new
+  // one — splitting without stripping it counted an extra line for every
+  // conventionally-terminated source file.
+  return content.replace(/\n$/, '').split('\n').length;
 }
 
 function riskFor(inDeg: number, entrypoint: boolean): Risk {
@@ -59,14 +62,26 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
   // Case-insensitive index built once. Resolving a reference whose case
   // doesn't match the file on disk used to scan every id, making a
   // case-sloppy repo O(files x refs).
+  // On a case-sensitive filesystem `src/Utils.js` and `src/utils.js` are two
+  // different files sharing one lowercased key. First writer wins, and the
+  // collision is recorded so realId() leaves those ids alone rather than
+  // rewriting every reference onto whichever file happened to be indexed.
   const byLowerId = new Map<string, string>();
-  for (const id of existingIds) byLowerId.set(id.toLowerCase(), id);
+  const ambiguousLowerIds = new Set<string>();
+  for (const id of existingIds) {
+    const key = id.toLowerCase();
+    const seen = byLowerId.get(key);
+    if (seen === undefined) byLowerId.set(key, id);
+    else if (seen !== id) ambiguousLowerIds.add(key);
+  }
 
   function fileExists(id: string): boolean {
     return byLowerId.has(id.toLowerCase());
   }
   function realId(id: string): string {
-    return byLowerId.get(id.toLowerCase()) ?? id;
+    const key = id.toLowerCase();
+    if (ambiguousLowerIds.has(key)) return id;
+    return byLowerId.get(key) ?? id;
   }
 
   const nodes = new Map<string, GraphNode>();

@@ -1,6 +1,6 @@
 {
   "name": "nervegraph",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Obsidian Graph View, but for source code — scan a JS/TS, HTML/CSS, Python, Ruby, Rust or Shopify Liquid project into a dependency graph and browse it interactively.",
   "type": "module",
   "license": "MIT",
@@ -33,9 +33,16 @@
     "liquid",
     "theme"
   ],
-  "bin": { "nerve": "dist/cli.js" },
-  "engines": { "node": ">=22.6" },
-  "files": ["dist", "viewer"],
+  "bin": {
+    "nerve": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "files": [
+    "dist",
+    "viewer"
+  ],
   "dependencies": {
     "fast-glob": "^3",
     "es-module-lexer": "^1",
@@ -50,7 +57,7 @@
     "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types test/**/*.test.ts",
+    "test": "node --test --experimental-strip-types \"test/**/*.test.ts\"",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   }

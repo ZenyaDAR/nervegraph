@@ -1,10 +1,6 @@
 import postcss from 'postcss';
 import type { RawRef, ScannerResult } from '../../graph/types.ts';
-
-function truncate(s: string): string {
-  const t = s.trim();
-  return t.length > 120 ? t.slice(0, 120) : t;
-}
+import { truncate } from './util.ts';
 
 const CLASS_RE = /\.([a-zA-Z_-][a-zA-Z0-9_-]*)/g;
 

@@ -37,15 +37,15 @@ export async function runScan(args: ScanArgs): Promise<number> {
   }
 
   const outDir = path.resolve(args.out ?? '.nervegraph');
+  let size: number;
   try {
-    await writeGraphAtomic(outDir, graph);
+    size = await writeGraphAtomic(outDir, graph);
   } catch (e: any) {
     console.error(`error: failed to write artifacts: ${e?.message ?? e}`);
     return 1;
   }
 
   const outPath = path.join(outDir, 'graph.json');
-  const size = Buffer.byteLength(JSON.stringify(graph));
 
   if (args.json) {
     console.log(JSON.stringify({ graph: outPath, stats: graph.stats, durationMs: graph.durationMs }));

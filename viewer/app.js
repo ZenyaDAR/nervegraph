@@ -110,8 +110,20 @@
     } catch { /* ignore */ }
   }
 
+  function fatal(message) {
+    const banner = document.getElementById('perf-banner');
+    banner.textContent = message;
+    banner.hidden = false;
+  }
+
   async function main() {
     const res = await fetch('/graph.json');
+    // The server answers a missing graph with a plain-text hint, not JSON —
+    // parsing it blind threw into an unhandled rejection and left a blank page.
+    if (!res.ok) {
+      fatal((await res.text().catch(() => '')).trim() || `could not load graph.json (${res.status})`);
+      return;
+    }
     const graph = await res.json();
     state.graph = graph;
     for (const n of graph.nodes) state.nodesById.set(n.id, n);
@@ -128,11 +140,13 @@
     document.getElementById('counts').textContent = `${graph.nodes.length} nodes · ${graph.edges.length} edges`;
     document.getElementById('mode-indicator').textContent = state.mode;
 
+    // Before the UI is built: it may drop the `asset` filter, and the checkbox
+    // and the initial graph data both have to be built from the final filter set.
+    checkPerfBanner();
     buildFilterUI(allTypes, allRels);
     buildGraphInstance();
     updateStatusBar();
     wireTopLevelUI();
-    checkPerfBanner();
 
     lightModeQuery?.addEventListener?.('change', () => {
       themeColors = readThemeColors();
@@ -233,10 +247,18 @@
   function buildGraphData() {
     const ids = visibleNodeIds();
     const nodes = state.graph.nodes.filter(n => ids.has(n.id)).map(n => ({ ...n }));
-    const links = state.graph.edges
-      .filter(e => ids.has(e.from) && ids.has(e.to) && state.relFilters.has(e.rel))
-      .map(e => ({ ...e, source: e.from, target: e.to }));
-    return { nodes, links };
+    // Several references between the same pair of files (one per line) are one
+    // relationship, drawn once and widened by `_count` — otherwise they stacked
+    // as identical overlapping lines and linkWidth had nothing to read.
+    const byPair = new Map();
+    for (const e of state.graph.edges) {
+      if (!ids.has(e.from) || !ids.has(e.to) || !state.relFilters.has(e.rel)) continue;
+      const key = `${e.from}\0${e.to}\0${e.rel}`;
+      const seen = byPair.get(key);
+      if (seen) seen._count++;
+      else byPair.set(key, { ...e, source: e.from, target: e.to, _count: 1 });
+    }
+    return { nodes, links: [...byPair.values()] };
   }
 
   function setGraphData(data) {
@@ -255,6 +277,16 @@
       if (e.to === id) inc.add(e.from);
     }
     return { out, inc };
+  }
+
+  // drawNode runs per node per frame and needs the *same* neighbour sets every
+  // time; recomputing them there scanned the whole edge list N times a frame.
+  // state.graph.edges never changes after load, so caching on the active id is
+  // enough.
+  let neighborCache = { id: null, value: null };
+  function neighborsOfCached(id) {
+    if (neighborCache.id !== id) neighborCache = { id, value: neighborsOf(id) };
+    return neighborCache.value;
   }
 
   function buildGraphInstance() {
@@ -363,7 +395,7 @@
   function drawNode(node, ctx, globalScale) {
     const r = nodeRadius(node);
     const active = state.selected ?? state.hovered;
-    const neigh = active ? neighborsOf(active) : null;
+    const neigh = active ? neighborsOfCached(active) : null;
     const isNeighbor = active && (node.id === active || neigh.out.has(node.id) || neigh.inc.has(node.id));
     const dimmed = active && !isNeighbor;
     const baseColor = node.missing ? STATUS_CRITICAL : colorForNode(node);
@@ -640,5 +672,5 @@
     });
   }
 
-  main();
+  main().catch(e => fatal(`could not load graph.json: ${e.message}`));
 })();

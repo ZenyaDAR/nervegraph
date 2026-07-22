@@ -1,18 +1,8 @@
 import { init, parse } from 'es-module-lexer';
 import type { RawRef, ScannerResult } from '../../graph/types.ts';
+import { lineAt, truncate } from './util.ts';
 
 await init;
-
-function lineAt(content: string, index: number): number {
-  let line = 1;
-  for (let i = 0; i < index; i++) if (content[i] === '\n') line++;
-  return line;
-}
-
-function truncate(s: string): string {
-  const t = s.trim();
-  return t.length > 120 ? t.slice(0, 120) : t;
-}
 
 export function scanJavaScript(file: { id: string; content: string }): ScannerResult {
   const refs: RawRef[] = [];

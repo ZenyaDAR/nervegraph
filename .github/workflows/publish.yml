@@ -18,8 +18,37 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
       - run: npm ci
-      - run: npm run build
-      - run: npm test
+
+      # A tag that got ahead of package.json would publish the old version
+      # while the Release below is named after the new one.
+      - name: Tag matches package.json
+        run: test "v$(npm pkg get version | tr -d '"')" = "$GITHUB_REF_NAME"
+
+      # prepublishOnly already runs typecheck + test + build.
       - run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Separate job so contents:write never reaches `npm ci` and the dependency
+  # lifecycle scripts it runs. Re-running just this job recovers a failed
+  # release without tripping over npm's already-published tag.
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Pushing a tag publishes to npm but does not touch the Releases page —
+      # they are separate things, and the repo sat on a stale "Latest" once
+      # because of it.
+      - name: Create GitHub Release
+        run: |
+          # A prerelease tag must not take over "Latest".
+          case "$TAG" in *-*) FLAGS=--prerelease ;; *) FLAGS= ;; esac
+          # `create` first, so only an already-exists failure is tolerated —
+          # auth and rate-limit errors still fail the step.
+          gh release create "$TAG" --generate-notes $FLAGS || gh release view "$TAG"
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

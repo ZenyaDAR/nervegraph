@@ -25,12 +25,6 @@ export interface ScannedFile {
   mtime: number;
 }
 
-export interface FileMeta {
-  mtime: number;
-  size: number;
-  hash: string;
-}
-
 export interface FilesResult {
   files: ScannedFile[];
   tooLarge: string[];
