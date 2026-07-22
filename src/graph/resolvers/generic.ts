@@ -49,8 +49,9 @@ export const genericResolvers: RelResolver[] = [
   { rel: 'css_import', resolve: resolveDirRelative },
   { rel: 'script_src', resolve: resolveDirRelative },
   { rel: 'link_href', resolve: resolveDirRelative },
-  // `asset` in a shopify theme is a fixed-convention lookup (assets/{target}),
-  // handled by resolvers/shopify.ts; in a plain js profile there's no such
-  // convention, so it falls back to plain directory-relative resolution.
-  { rel: 'asset', profiles: ['js'], resolve: resolveDirRelative },
+  // `asset` is always a path — a CSS url() or an <img src>. The Shopify
+  // convention lookup ({{ 'x' | asset_url }} -> assets/x) is a separate rel,
+  // `asset_url`, so a theme's own stylesheet can still say url("../img/x.png")
+  // and resolve correctly.
+  { rel: 'asset', resolve: resolveDirRelative },
 ];

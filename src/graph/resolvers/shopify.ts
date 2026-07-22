@@ -20,6 +20,6 @@ export const shopifyResolvers: RelResolver[] = [
   { rel: 'template_section', profiles: ['shopify'], resolve: (target, _fromDir, ctx) => structural(`sections/${target}.liquid`, ctx) },
   { rel: 'section_group', profiles: ['shopify'], resolve: (target, _fromDir, ctx) => structural(`sections/${target}.json`, ctx) },
   { rel: 'content_for', profiles: ['shopify'], resolve: (target, _fromDir, ctx) => structural(`blocks/${target}.liquid`, ctx) },
-  { rel: 'asset', profiles: ['shopify'], resolve: (target, _fromDir, ctx) => structural(`assets/${target}`, ctx) },
+  { rel: 'asset_url', profiles: ['shopify'], resolve: (target, _fromDir, ctx) => structural(`assets/${target}`, ctx) },
   { rel: 'translation', profiles: ['shopify'], resolve: (_target, _fromDir, ctx) => structural(ctx.defaultLocale ?? 'locales/en.default.json', ctx) },
 ];

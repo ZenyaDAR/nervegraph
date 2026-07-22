@@ -95,7 +95,9 @@ export function scanLiquid(file: { id: string; content: string }): ScannerResult
     while ((m = assetRe.exec(content))) {
       const target = m[1] ?? m[2];
       const line = lineAt(content, m.index);
-      refs.push({ rel: 'asset', target, line, raw: truncateRaw(m[0]), literal: true });
+      // `asset_url` is a name looked up by convention in assets/, not a path —
+      // distinct from the `asset` rel that CSS url() and <img src> emit.
+      refs.push({ rel: 'asset_url', target, line, raw: truncateRaw(m[0]), literal: true });
     }
   }
 
