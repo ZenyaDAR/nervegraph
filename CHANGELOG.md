@@ -29,6 +29,25 @@ values, as the schema requires, reads it unchanged.
   `sh_source`, `tf_module`.
 - `ResolveContext` gained `listDir`, so a resolver can handle an import that
   names a directory (a Go package, a Terraform module) rather than a file.
+- **Color by type / language / directory / risk** in the viewer. The eight
+  validated palette slots are handed to whatever categories the current graph
+  contains, biggest first — so a polyglot repo never depends on two languages
+  that share a slot in the type palette being distinguishable.
+- **Size by dependents / dependencies / lines of code.**
+- **Issues panel** (`i`, or the status-bar button) — the `unresolved` list with
+  each reference's reason and hint, the cycles found during the scan, and
+  read/parse warnings. All of it was already written to `graph.json` and none
+  of it was shown anywhere.
+- **Cycle edges are drawn in the critical color**, with an `only cycles` filter
+  and a warning in the details panel of any file taking part in one.
+- **Shortest path between two files** — shift-click a second node to trace how
+  the selected one reaches it; everything off the path recedes.
+- **Focus subgraph is configurable**: depth 1–3, and direction (what it uses /
+  what uses it / both) instead of a fixed two-hop walk in both directions.
+- **Search shows its matches** — a list ordered by dependents instead of
+  jumping to the alphabetically first hit.
+- **Theme button** (light / dark / follow system) and a **`?` card** with the
+  keyboard shortcuts and how to read the graph.
 
 ### Added
 - **Non-relative import resolution** — `tsconfig.json`/`jsconfig.json` `paths`

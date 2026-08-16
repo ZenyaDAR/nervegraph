@@ -55,7 +55,19 @@
     },
   };
 
+  // The eight categorical slots, in the validated order (COLOR_SCHEME.md).
+  // "Color by language / directory" hands them out to whatever categories the
+  // graph in front of you actually contains, so two languages that share a slot
+  // in the type palette are never ambiguous in the same graph.
+  const SLOT_HUES = {
+    dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'],
+    light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'],
+  };
+  const OTHER_HUE = '#898781';
+
   const STATUS_CRITICAL = '#d03b3b';
+  const STATUS_WARNING = '#fab219';
+  const RISK_COLOR = { high: STATUS_CRITICAL, medium: STATUS_WARNING, low: OTHER_HUE };
   // Code-level imports are dashed; structural inclusion (Liquid render, Rust
   // `mod`) stays solid, because it defines the file tree rather than using it.
   const DASHED_RELS = new Set([
@@ -69,7 +81,20 @@
   const lightModeQuery = window.matchMedia?.('(prefers-color-scheme: light)');
 
   function mode() {
+    if (state.theme !== 'auto') return state.theme;
     return lightModeQuery?.matches ? 'light' : 'dark';
+  }
+
+  // 'auto' means "no data-theme attribute", which is what app.css's media
+  // query keys off — so the three states stay in one place.
+  function applyTheme() {
+    if (state.theme === 'auto') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = state.theme;
+    themeColors = readThemeColors();
+    categoryColorCache = null;
+    document.getElementById('theme-btn').title = `theme: ${state.theme}`;
+    renderLegend();
+    refreshHighlight();
   }
 
   function cssVar(name) {
@@ -78,7 +103,7 @@
 
   let themeColors = readThemeColors();
   function readThemeColors() {
-    return { pillBg: cssVar('--label-pill-bg'), ink: cssVar('--text') };
+    return { pillBg: cssVar('--label-pill-bg'), ink: cssVar('--text'), accent: cssVar('--accent') };
   }
 
   const state = {
@@ -89,12 +114,24 @@
     onlyOrphans: false,
     onlyRisk: false,
     onlyMissing: false,
+    onlyCycles: false,
     search: '',
     selected: null,
     hovered: null,
     mode: 'galaxy',
     focusId: null,
+    focusDepth: 2,
+    focusDir: 'both',
     visibleNodeCount: 0,
+    theme: 'auto',
+    colorBy: 'type',
+    sizeBy: 'in',
+    // Set by shift-clicking a second node: the shortest dependency path
+    // between two files, which is the "what reaches what" question a plain
+    // neighbour highlight can't answer.
+    path: null,
+    pathTarget: null,
+    cycles: { nodes: new Set(), edges: new Set(), list: [] },
   };
 
   const storageKey = () => `nervegraph:${state.graph ? state.graph.root : ''}`;
@@ -113,6 +150,9 @@
         typeFilters: [...state.typeFilters],
         relFilters: [...state.relFilters],
         mode: state.mode,
+        theme: state.theme,
+        colorBy: state.colorBy,
+        sizeBy: state.sizeBy,
       }));
     } catch { /* ignore */ }
   }
@@ -142,6 +182,10 @@
     state.typeFilters = new Set(persisted?.typeFilters ?? [...allTypes].filter(t => t !== 'asset'));
     state.relFilters = new Set(persisted?.relFilters ?? [...allRels].filter(r => r !== 'translation' && r !== 'class_usage'));
     state.mode = persisted?.mode ?? 'galaxy';
+    state.theme = persisted?.theme ?? 'auto';
+    state.colorBy = persisted?.colorBy ?? 'type';
+    state.sizeBy = persisted?.sizeBy ?? 'in';
+    state.cycles = parseCycles(graph.warnings ?? []);
 
     document.getElementById('root-name').textContent = graph.root.split(/[\\/]/).pop();
     document.getElementById('counts').textContent = `${graph.nodes.length} nodes · ${graph.edges.length} edges`;
@@ -152,11 +196,14 @@
     checkPerfBanner();
     buildFilterUI(allTypes, allRels);
     buildGraphInstance();
+    applyTheme();
     updateStatusBar();
     wireTopLevelUI();
 
     lightModeQuery?.addEventListener?.('change', () => {
       themeColors = readThemeColors();
+      categoryColorCache = null;
+      renderLegend();
       refreshHighlight();
     });
   }
@@ -203,10 +250,116 @@
     document.getElementById('count-orphans').textContent = orphanCount;
     document.getElementById('count-risk').textContent = riskCount;
     document.getElementById('count-missing').textContent = missingCount;
+    document.getElementById('count-cycles').textContent = state.cycles.nodes.size;
 
     document.getElementById('only-orphans').addEventListener('change', (e) => { state.onlyOrphans = e.target.checked; applyFilters(); });
     document.getElementById('only-risk').addEventListener('change', (e) => { state.onlyRisk = e.target.checked; applyFilters(); });
     document.getElementById('only-missing').addEventListener('change', (e) => { state.onlyMissing = e.target.checked; applyFilters(); });
+    document.getElementById('only-cycles').addEventListener('change', (e) => { state.onlyCycles = e.target.checked; applyFilters(); });
+
+    const colorBy = document.getElementById('color-by');
+    colorBy.value = state.colorBy;
+    colorBy.addEventListener('change', () => setColorBy(colorBy.value));
+
+    const sizeBy = document.getElementById('size-by');
+    sizeBy.value = state.sizeBy;
+    sizeBy.addEventListener('change', () => {
+      state.sizeBy = sizeBy.value;
+      savePersisted();
+      // Radius feeds the charge force, so the layout has to be nudged awake.
+      fg.d3ReheatSimulation();
+      refreshHighlight();
+    });
+
+    for (const [id, key, cast] of [['focus-depth', 'focusDepth', Number], ['focus-dir', 'focusDir', String]]) {
+      const el = document.getElementById(id);
+      el.value = String(state[key]);
+      el.addEventListener('change', () => { state[key] = cast(el.value); applyFilters(); });
+    }
+
+    renderLegend();
+  }
+
+  // ── Categorical coloring ─────────────────────────────────────────────────
+
+  function categoryOf(n) {
+    if (state.colorBy === 'language') return n.lang || 'other';
+    if (state.colorBy === 'directory') {
+      const slash = n.id.indexOf('/');
+      return slash < 0 ? '(root)' : n.id.slice(0, slash);
+    }
+    return n.type;
+  }
+
+  // Slots go to the biggest categories first: in a repo of 900 JS files and one
+  // stray .rb, the JS files are what the eye needs to separate. Everything past
+  // the eighth folds into the neutral, which is the method's "Other" rule.
+  let categoryColorCache = null;
+  function categoryColors() {
+    if (categoryColorCache?.key === `${state.colorBy}:${mode()}`) return categoryColorCache.map;
+    const counts = new Map();
+    for (const n of state.graph.nodes) counts.set(categoryOf(n), (counts.get(categoryOf(n)) ?? 0) + 1);
+    const ordered = [...counts.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+    const hues = SLOT_HUES[mode()];
+    const map = new Map();
+    ordered.forEach(([name], i) => map.set(name, i < hues.length ? hues[i] : OTHER_HUE));
+    categoryColorCache = { key: `${state.colorBy}:${mode()}`, map, ordered };
+    return map;
+  }
+
+  function setColorBy(value) {
+    state.colorBy = value;
+    categoryColorCache = null;
+    savePersisted();
+    renderLegend();
+    refreshHighlight();
+  }
+
+  function renderLegend() {
+    const box = document.getElementById('legend');
+    if (!box) return;
+    box.replaceChildren();
+    // With "color by type" the Types filter below is already the legend, and
+    // repeating it would just push the filters off-screen.
+    if (state.colorBy === 'type') return;
+
+    const rows = state.colorBy === 'risk'
+      ? [['high', RISK_COLOR.high], ['medium', RISK_COLOR.medium], ['low', RISK_COLOR.low], ['missing', STATUS_CRITICAL]]
+          .map(([name, color]) => [name, color, state.graph.nodes.filter(n => (name === 'missing' ? n.missing : n.risk === name)).length])
+      : (categoryColors(), categoryColorCache.ordered.slice(0, 9)
+          .map(([name, count]) => [name, categoryColorCache.map.get(name), count]));
+
+    for (const [name, color, count] of rows) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const swatch = document.createElement('span');
+      swatch.className = 'type-swatch';
+      swatch.style.background = color;
+      const label = document.createElement('span');
+      label.textContent = name;
+      const num = document.createElement('span');
+      num.textContent = count;
+      row.append(swatch, label, num);
+      box.appendChild(row);
+    }
+  }
+
+  // ── Cycles ───────────────────────────────────────────────────────────────
+
+  // build.ts already found the cycles and wrote them into warnings as
+  // "dependency cycle: a -> b -> a"; the viewer only has to read them back so
+  // the edges involved can be drawn in the critical color.
+  function parseCycles(warnings) {
+    const nodes = new Set(), edges = new Set(), list = [];
+    for (const w of warnings) {
+      if (w.code !== 'cycle') continue;
+      const files = String(w.message).replace(/^dependency cycle:\s*/, '').split(' -> ');
+      if (files.length < 2) continue;
+      list.push(files);
+      for (const f of files) nodes.add(f);
+      for (let i = 0; i + 1 < files.length; i++) edges.add(`${files[i]}\0${files[i + 1]}`);
+    }
+    return { nodes, edges, list };
   }
 
   function span(text) {
@@ -226,29 +379,56 @@
       if (state.onlyOrphans && !n.orphan) continue;
       if (state.onlyRisk && n.risk !== 'high') continue;
       if (state.onlyMissing && !n.missing) continue;
+      if (state.onlyCycles && !state.cycles.nodes.has(n.id)) continue;
       ids.add(n.id);
     }
     if (state.focusId) {
-      const subgraph = subgraphAround(state.focusId, 2);
+      const subgraph = subgraphAround(state.focusId, state.focusDepth, state.focusDir);
       for (const id of [...ids]) if (!subgraph.has(id)) ids.delete(id);
     }
     return ids;
   }
 
-  function subgraphAround(id, depth) {
+  // dir: 'out' follows dependencies, 'in' follows dependents, 'both' ignores
+  // direction. "What breaks if I change this" and "what does this pull in" are
+  // different questions and a fixed both-ways walk answered neither cleanly.
+  function subgraphAround(id, depth, dir = 'both') {
     const visited = new Set([id]);
     let frontier = [id];
     for (let d = 0; d < depth; d++) {
       const next = [];
       for (const f of frontier) {
         for (const e of state.graph.edges) {
-          if (e.from === f && !visited.has(e.to)) { visited.add(e.to); next.push(e.to); }
-          if (e.to === f && !visited.has(e.from)) { visited.add(e.from); next.push(e.from); }
+          if (dir !== 'in' && e.from === f && !visited.has(e.to)) { visited.add(e.to); next.push(e.to); }
+          if (dir !== 'out' && e.to === f && !visited.has(e.from)) { visited.add(e.from); next.push(e.from); }
         }
       }
       frontier = next;
     }
     return visited;
+  }
+
+  // Shortest dependency path, tried in both directions so shift-clicking works
+  // whichever of the two files happens to be upstream.
+  function shortestPath(from, to) {
+    for (const [a, b] of [[from, to], [to, from]]) {
+      const prev = new Map([[a, null]]);
+      const queue = [a];
+      while (queue.length) {
+        const cur = queue.shift();
+        if (cur === b) {
+          const ids = [];
+          for (let at = b; at !== null; at = prev.get(at)) ids.unshift(at);
+          const edges = new Set();
+          for (let i = 0; i + 1 < ids.length; i++) edges.add(`${ids[i]}\0${ids[i + 1]}`);
+          return { ids: new Set(ids), order: ids, edges };
+        }
+        for (const e of state.graph.edges) {
+          if (e.from === cur && !prev.has(e.to)) { prev.set(e.to, cur); queue.push(e.to); }
+        }
+      }
+    }
+    return null;
   }
 
   function buildGraphData() {
@@ -274,7 +454,11 @@
   }
 
   function nodeRadius(n) {
-    return 4 + Math.min(12, Math.sqrt(n.in) * 2.5);
+    // loc runs into the thousands where degrees run into the tens, so the two
+    // scales need different factors to land in the same 4–16px range.
+    const value = state.sizeBy === 'loc' ? n.loc : state.sizeBy === 'out' ? n.out : n.in;
+    const factor = state.sizeBy === 'loc' ? 0.45 : 2.5;
+    return 4 + Math.min(12, Math.sqrt(Math.max(0, value)) * factor);
   }
 
   function neighborsOf(id) {
@@ -344,13 +528,20 @@
     return table[type] ?? table.unknown;
   }
   function colorForNode(n) {
-    return colorForType(n.type);
+    if (state.colorBy === 'risk') return n.missing ? STATUS_CRITICAL : RISK_COLOR[n.risk] ?? OTHER_HUE;
+    if (state.colorBy === 'type') return colorForType(n.type);
+    return categoryColors().get(categoryOf(n)) ?? OTHER_HUE;
   }
   function colorForLink(l) {
+    if (state.path?.edges.has(`${l.from}\0${l.to}`)) return themeColors.accent;
+    // A cycle is the one structural defect the graph can prove, so it outranks
+    // the relation's own muted colour.
+    if (state.cycles.edges.has(`${l.from}\0${l.to}`)) return STATUS_CRITICAL;
     return REL_COLOR[mode()][l.rel] ?? REL_COLOR[mode()].render;
   }
 
   function isHighlighted(link) {
+    if (state.path) return state.path.edges.has(`${link.from}\0${link.to}`);
     if (!state.selected && !state.hovered) return false;
     const active = state.selected ?? state.hovered;
     return link.from === active || link.to === active;
@@ -361,7 +552,17 @@
     refreshHighlight();
   }
 
-  function handleNodeClick(node) {
+  function handleNodeClick(node, event) {
+    // Shift-click asks "how does the selected file reach this one".
+    if (event?.shiftKey && state.selected && state.selected !== node.id) {
+      state.path = shortestPath(state.selected, node.id);
+      state.pathTarget = node.id;
+      refreshHighlight();
+      updateStatusBar();
+      return;
+    }
+    state.path = null;
+    state.pathTarget = null;
     selectNode(node.id);
   }
 
@@ -374,6 +575,8 @@
 
   function clearSelection() {
     state.selected = null;
+    state.path = null;
+    state.pathTarget = null;
     closeDetails();
     refreshHighlight();
     updateStatusBar();
@@ -385,6 +588,7 @@
   function refreshHighlight() {
     fg.linkColor(l => {
       const c = colorForLink(l);
+      if (state.path) return state.path.edges.has(`${l.from}\0${l.to}`) ? c : dim(c);
       const active = state.selected ?? state.hovered;
       if (!active) return c;
       return (l.from === active || l.to === active) ? c : dim(c);
@@ -404,7 +608,9 @@
     const active = state.selected ?? state.hovered;
     const neigh = active ? neighborsOfCached(active) : null;
     const isNeighbor = active && (node.id === active || neigh.out.has(node.id) || neigh.inc.has(node.id));
-    const dimmed = active && !isNeighbor;
+    // A traced path replaces the neighbour highlight: everything off the path
+    // recedes, however close it is to either end of it.
+    const dimmed = state.path ? !state.path.ids.has(node.id) : (active && !isNeighbor);
     const baseColor = node.missing ? STATUS_CRITICAL : colorForNode(node);
     const color = dimmed ? dim(baseColor) : baseColor;
 
@@ -429,7 +635,7 @@
       ctx.stroke();
     }
 
-    if (!dimmed && (isNeighbor || shouldLabel(node, globalScale))) {
+    if (!dimmed && (isNeighbor || state.path?.ids.has(node.id) || shouldLabel(node, globalScale))) {
       drawLabel(node, ctx, globalScale, r);
     }
   }
@@ -502,9 +708,18 @@
     typeLine.className = 'type-line';
     const swatch = document.createElement('span');
     swatch.className = 'type-swatch';
-    swatch.style.background = colorForType(n.type);
+    swatch.style.background = colorForNode(n);
     typeLine.append(swatch, ` ${n.lang} ${n.type} · ${n.loc} loc · ${(n.size / 1024).toFixed(1)} KB`);
     body.appendChild(typeLine);
+
+    if (state.cycles.nodes.has(n.id)) {
+      const warn = document.createElement('div');
+      warn.className = 'risk-box missing';
+      warn.textContent = '⚠ part of a dependency cycle';
+      warn.style.cursor = 'pointer';
+      warn.addEventListener('click', () => openIssues('cycles'));
+      body.appendChild(warn);
+    }
 
     if (n.missing) {
       const warn = document.createElement('div');
@@ -608,10 +823,116 @@
     const scanned = new Date(state.graph.scannedAt);
     right.textContent = `scanned ${timeAgo(scanned)}`;
 
+    const issuesBtn = document.getElementById('issues-btn');
+    issuesBtn.textContent = `⚠ ${unresolved + state.cycles.list.length} issues`;
+
     if (state.selected) {
       const n = state.nodesById.get(state.selected);
       if (n) mid.textContent = `${n.id.split('/').pop()} · ${n.in} in · ${n.out} out`;
     }
+    if (state.pathTarget) {
+      const to = state.pathTarget.split('/').pop();
+      const from = (state.selected ?? '').split('/').pop();
+      mid.textContent = state.path
+        ? `path ${from} → ${to} · ${state.path.order.length - 1} hops`
+        : `no path between ${from} and ${to}`;
+    }
+  }
+
+  // ── Issues panel ─────────────────────────────────────────────────────────
+
+  // Everything the scan already knows is wrong: references it could not
+  // resolve, cycles it proved, and files it could not read. All of it was in
+  // graph.json and none of it was ever shown.
+  function openIssues(scrollTo) {
+    const panel = document.getElementById('issues');
+    panel.hidden = false;
+    renderIssues();
+    if (scrollTo) document.getElementById(`issues-${scrollTo}`)?.scrollIntoView({ block: 'start' });
+  }
+
+  function toggleIssues() {
+    const panel = document.getElementById('issues');
+    if (panel.hidden) openIssues(); else panel.hidden = true;
+  }
+
+  const ISSUE_LIMIT = 100;
+
+  function renderIssues() {
+    const body = document.getElementById('issues-body');
+    body.replaceChildren();
+
+    const cycles = state.cycles.list;
+    if (cycles.length) {
+      body.appendChild(heading('issues-cycles', `Cycles (${cycles.length})`));
+      cycles.forEach(files => {
+        const row = document.createElement('div');
+        row.className = 'issue cycle';
+        row.textContent = files.map(f => f.split('/').pop()).join(' → ');
+        row.title = files.join(' → ');
+        row.addEventListener('click', () => selectNode(files[0]));
+        body.appendChild(row);
+      });
+    }
+
+    const unresolved = state.graph.unresolved ?? [];
+    if (unresolved.length) {
+      const byReason = {};
+      for (const u of unresolved) byReason[u.reason] = (byReason[u.reason] ?? 0) + 1;
+      const summary = Object.entries(byReason).map(([r, n]) => `${n} ${r}`).join(' · ');
+      body.appendChild(heading('issues-unresolved', `Unresolved (${unresolved.length}) — ${summary}`));
+      // Anything the scan could not point at a file is here; past a hundred
+      // rows the list stops being read and starts being scrolled.
+      for (const u of unresolved.slice(0, ISSUE_LIMIT)) {
+        const row = document.createElement('div');
+        row.className = 'issue';
+        const head = document.createElement('div');
+        head.textContent = u.raw || u.rel;
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = `${u.from}:${u.line} · ${u.rel} · ${u.reason} — ${u.hint}`;
+        row.append(head, meta);
+        row.addEventListener('click', () => selectNode(u.from));
+        body.appendChild(row);
+      }
+      if (unresolved.length > ISSUE_LIMIT) {
+        const more = document.createElement('div');
+        more.className = 'empty';
+        more.textContent = `… and ${unresolved.length - ISSUE_LIMIT} more in graph.json`;
+        body.appendChild(more);
+      }
+    }
+
+    const warnings = (state.graph.warnings ?? []).filter(w => w.code !== 'cycle');
+    if (warnings.length) {
+      body.appendChild(heading('issues-warnings', `Warnings (${warnings.length})`));
+      for (const w of warnings) {
+        const row = document.createElement('div');
+        row.className = 'issue';
+        const head = document.createElement('div');
+        head.textContent = w.file || '(project)';
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = `${w.code} — ${w.message}`;
+        row.append(head, meta);
+        if (w.file) row.addEventListener('click', () => selectNode(w.file));
+        body.appendChild(row);
+      }
+    }
+
+    if (!body.childElementCount) {
+      const ok = document.createElement('div');
+      ok.className = 'empty';
+      ok.textContent = 'Nothing unresolved, no cycles, no warnings.';
+      body.appendChild(ok);
+    }
+  }
+
+  function heading(id, text) {
+    const h = document.createElement('h4');
+    h.id = id;
+    h.textContent = text;
+    return h;
   }
 
   function timeAgo(date) {
@@ -628,11 +949,51 @@
     refreshHighlight();
   }
 
+  const SEARCH_LIMIT = 20;
+
+  // Jumping straight to the first match was wrong more often than right: with
+  // ten files called index.ts, the one you want is rarely the alphabetically
+  // first. Show the matches and let the click decide.
   function doSearch(q) {
-    state.search = q.toLowerCase();
-    if (!state.search) return;
-    const match = state.graph.nodes.find(n => n.id.toLowerCase().includes(state.search));
-    if (match) selectNode(match.id);
+    state.search = q.trim().toLowerCase();
+    const box = document.getElementById('search-results');
+    box.replaceChildren();
+    if (!state.search) { box.hidden = true; return; }
+
+    const matches = state.graph.nodes
+      .filter(n => n.id.toLowerCase().includes(state.search))
+      .sort((a, b) => b.in - a.in || (a.id < b.id ? -1 : 1));
+
+    box.hidden = false;
+    if (!matches.length) {
+      const none = document.createElement('div');
+      none.className = 'none';
+      none.textContent = 'no match';
+      box.appendChild(none);
+      return;
+    }
+    for (const n of matches.slice(0, SEARCH_LIMIT)) {
+      const row = document.createElement('div');
+      row.textContent = n.id;
+      row.title = `${n.in} dependents`;
+      row.addEventListener('mousedown', (e) => {
+        e.preventDefault(); // keep focus so Escape still closes the list
+        selectNode(n.id);
+        box.hidden = true;
+      });
+      box.appendChild(row);
+    }
+    if (matches.length > SEARCH_LIMIT) {
+      const more = document.createElement('div');
+      more.className = 'none';
+      more.textContent = `… ${matches.length - SEARCH_LIMIT} more`;
+      box.appendChild(more);
+    }
+  }
+
+  function pickFirstSearchResult() {
+    const first = document.getElementById('search-results').querySelector('div:not(.none)');
+    if (first) first.dispatchEvent(new MouseEvent('mousedown'));
   }
 
   function checkPerfBanner() {
@@ -648,15 +1009,38 @@
     }
   }
 
+  const COLOR_MODES = ['type', 'language', 'directory', 'risk'];
+
   function wireTopLevelUI() {
     const search = document.getElementById('search');
+    const results = document.getElementById('search-results');
     search.addEventListener('input', () => doSearch(search.value));
-    search.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(search.value); });
+    search.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') pickFirstSearchResult();
+      if (e.key === 'Escape') results.hidden = true;
+    });
 
     document.getElementById('details-close').addEventListener('click', clearSelection);
     document.getElementById('refresh-btn').addEventListener('click', () => location.reload());
     document.getElementById('filters-toggle').addEventListener('click', () => {
       document.getElementById('filters').classList.toggle('open');
+    });
+
+    document.getElementById('theme-btn').addEventListener('click', () => {
+      const next = { auto: 'dark', dark: 'light', light: 'auto' };
+      state.theme = next[state.theme];
+      savePersisted();
+      applyTheme();
+    });
+
+    const help = document.getElementById('help');
+    const toggleHelp = () => { help.hidden = !help.hidden; };
+    document.getElementById('help-btn').addEventListener('click', toggleHelp);
+    help.addEventListener('click', () => { help.hidden = true; });
+
+    document.getElementById('issues-btn').addEventListener('click', toggleIssues);
+    document.getElementById('issues-close').addEventListener('click', () => {
+      document.getElementById('issues').hidden = true;
     });
 
     window.addEventListener('keydown', (e) => {
@@ -667,8 +1051,17 @@
       if (e.key === '/' || (e.ctrlKey && e.key.toLowerCase() === 'k')) {
         e.preventDefault();
         search.focus();
+      } else if (e.key === '?') {
+        toggleHelp();
       } else if (e.key === 'Escape') {
-        clearSelection();
+        if (!help.hidden) help.hidden = true;
+        else clearSelection();
+      } else if (e.key === 'i') {
+        toggleIssues();
+      } else if (e.key === 'c') {
+        const next = COLOR_MODES[(COLOR_MODES.indexOf(state.colorBy) + 1) % COLOR_MODES.length];
+        document.getElementById('color-by').value = next;
+        setColorBy(next);
       } else if (e.key === 'f') {
         fg.zoomToFit(400, 40);
       } else if (e.key === 'g' || e.key === 't') {

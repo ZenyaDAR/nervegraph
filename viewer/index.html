@@ -11,7 +11,12 @@
     <span id="brand">nervegraph</span>
     <span id="root-name"></span>
     <span id="counts"></span>
-    <input id="search" type="text" placeholder="⌕ search  (/ or Ctrl+K)" autocomplete="off">
+    <div id="search-wrap">
+      <input id="search" type="text" placeholder="⌕ search  (/ or Ctrl+K)" autocomplete="off">
+      <div id="search-results" hidden></div>
+    </div>
+    <button id="theme-btn" title="light / dark / follow system">◐</button>
+    <button id="help-btn" title="keyboard shortcuts (?)">?</button>
     <button id="refresh-btn" title="reload graph.json">⟳</button>
   </header>
 
@@ -19,6 +24,24 @@
     <aside id="filters">
       <button id="filters-toggle" class="panel-toggle" aria-label="toggle filters">☰</button>
       <div id="filters-body">
+        <h2>View</h2>
+        <label class="control">color by
+          <select id="color-by">
+            <option value="type">type</option>
+            <option value="language">language</option>
+            <option value="directory">directory</option>
+            <option value="risk">risk</option>
+          </select>
+        </label>
+        <label class="control">size by
+          <select id="size-by">
+            <option value="in">dependents</option>
+            <option value="out">dependencies</option>
+            <option value="loc">lines of code</option>
+          </select>
+        </label>
+        <div id="legend"></div>
+
         <h2>Types</h2>
         <div id="type-filters"></div>
         <h2>Relations</h2>
@@ -27,12 +50,35 @@
         <label><input type="checkbox" id="only-orphans"> only orphans <span id="count-orphans"></span></label>
         <label><input type="checkbox" id="only-risk"> only high risk <span id="count-risk"></span></label>
         <label><input type="checkbox" id="only-missing"> only missing <span id="count-missing"></span></label>
+        <label><input type="checkbox" id="only-cycles"> only cycles <span id="count-cycles"></span></label>
+        <h2>Focus</h2>
+        <label class="control">depth
+          <select id="focus-depth">
+            <option value="1">1</option>
+            <option value="2" selected>2</option>
+            <option value="3">3</option>
+          </select>
+        </label>
+        <label class="control">direction
+          <select id="focus-dir">
+            <option value="both">both</option>
+            <option value="out">what it uses</option>
+            <option value="in">what uses it</option>
+          </select>
+        </label>
       </div>
     </aside>
 
     <div id="canvas-wrap">
       <div id="graph"></div>
       <div id="perf-banner" hidden></div>
+      <section id="issues" hidden>
+        <header>
+          <span id="issues-title">Issues</span>
+          <button id="issues-close" aria-label="close">✕</button>
+        </header>
+        <div id="issues-body"></div>
+      </section>
     </div>
 
     <aside id="details">
@@ -44,8 +90,37 @@
   <footer id="statusbar">
     <span id="mode-indicator">galaxy</span>
     <span id="status-mid"></span>
+    <button id="issues-btn" type="button"></button>
     <span id="status-right"></span>
   </footer>
+
+  <div id="help" hidden>
+    <div class="help-card">
+      <h3>Keyboard</h3>
+      <ul>
+        <li><kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd> — search</li>
+        <li><kbd>f</kbd> — fit graph to screen</li>
+        <li><kbd>g</kbd> / <kbd>t</kbd> — galaxy ↔ tree layout</li>
+        <li><kbd>i</kbd> — issues panel (unresolved refs and cycles)</li>
+        <li><kbd>c</kbd> — cycle through color-by modes</li>
+        <li><kbd>Esc</kbd> — clear selection</li>
+        <li><kbd>?</kbd> — this card</li>
+      </ul>
+      <h3>Mouse</h3>
+      <ul>
+        <li>click — select a file</li>
+        <li><kbd>Shift</kbd>+click — shortest path from the selected file</li>
+        <li>drag — pin a node where you drop it</li>
+      </ul>
+      <h3>Reading the graph</h3>
+      <ul>
+        <li>ring around a node — entrypoint</li>
+        <li>dashed outline — referenced but missing on disk</li>
+        <li>dashed line — code import; solid — structural inclusion</li>
+        <li>red line — part of a dependency cycle</li>
+      </ul>
+    </div>
+  </div>
 
   <script src="/vendor/force-graph.js"></script>
   <script src="/app.js"></script>
