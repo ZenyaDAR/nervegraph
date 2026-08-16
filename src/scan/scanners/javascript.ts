@@ -32,10 +32,18 @@ export function scanJavaScript(file: { id: string; content: string }): ScannerRe
   }
 
   if (!usedLexer) {
-    // Fallback regex pass for non-module scripts, imports/require in strings only.
+    // Fallback regex pass. es-module-lexer is a JS lexer, so TSX generics and
+    // some decorator syntax make it throw — and this branch used to catch only
+    // `import()` and `require()`, silently dropping every static import in the
+    // file. A .tsx component then looked like it depended on nothing.
+    const staticRe = /\b(?:import|export)\b[\s\S]{0,400}?\bfrom\s*(?:'([^']+)'|"([^"]+)")|^\s*import\s*(?:'([^']+)'|"([^"]+)")/gm;
     const importRe = /\bimport\s*\(\s*(?:'([^']+)'|"([^"]+)")\s*\)/g;
     const requireRe = /\brequire\s*\(\s*(?:'([^']+)'|"([^"]+)")\s*\)/g;
     let m: RegExpExecArray | null;
+    while ((m = staticRe.exec(content))) {
+      const target = m[1] ?? m[2] ?? m[3] ?? m[4];
+      refs.push({ rel: 'import', target, line: lineAt(content, m.index), raw: truncate(m[0]), literal: true });
+    }
     while ((m = importRe.exec(content))) {
       const target = m[1] ?? m[2];
       refs.push({ rel: 'dynamic_import', target, line: lineAt(content, m.index), raw: truncate(m[0]), literal: true });

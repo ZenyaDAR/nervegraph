@@ -2,6 +2,29 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioning per [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Non-relative import resolution** — `tsconfig.json`/`jsconfig.json` `paths`
+  and `baseUrl`, `package.json` `imports` (`#alias`), and npm/pnpm workspace
+  package names now resolve to project files. A TypeScript project using
+  `@/components/Button` previously produced almost no edges, because every
+  aliased specifier looked like a bare npm package. tsconfig is read as JSONC,
+  so comments and trailing commas are fine.
+- **`poly` profile** — a repo with `Cargo.toml`, `go.mod`, `pyproject.toml`,
+  `Gemfile`, `composer.json`, `CMakeLists.txt`, `pom.xml` or a Gradle build is
+  detected instead of being scanned as JavaScript with a "no known project
+  type" warning.
+
+### Fixed
+- A file the JS lexer cannot parse (a `.tsx` with generic arrows is the usual
+  case) lost every static import: the fallback pass only matched `import()` and
+  `require()`. It now matches `import … from '…'` and `export … from '…'` too.
+- Sass `@use`/`@forward`/`@import` without an extension resolved to nothing.
+  `base` now finds `_base.scss`, `base.scss`, or `base/_index.scss`.
+- The JS extension chain missed `.cjs`, `.mts`, `.cts` and `index.tsx`/
+  `index.jsx` directory entries.
+
 ## [0.2.1] — 2026-07-22
 
 Bug fixes from a full review of the 0.2.0 code. No schema change.

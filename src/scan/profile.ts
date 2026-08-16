@@ -3,17 +3,30 @@ import path from 'node:path';
 import type { NodeType } from '../graph/types.ts';
 import { langFor, type Lang } from './extensions.ts';
 
-export type Profile = 'shopify' | 'js';
+export type Profile = 'shopify' | 'js' | 'poly';
+
+export const PROFILES: Profile[] = ['shopify', 'js', 'poly'];
+
+// Manifest files that identify a non-JS ecosystem. A repo with one of these
+// and no package.json used to be scanned as "js" with a "no known project
+// type" warning, which was both noisy and wrong — nothing about a Cargo
+// workspace is a JavaScript project.
+const POLY_MARKERS = [
+  'Cargo.toml', 'go.mod', 'pyproject.toml', 'setup.py', 'requirements.txt',
+  'Gemfile', 'composer.json', 'CMakeLists.txt', 'Makefile',
+  'pom.xml', 'build.gradle', 'build.gradle.kts',
+];
 
 export function detectProfile(root: string, forced?: string): { profile: Profile; warning?: string } {
-  if (forced === 'shopify' || forced === 'js') return { profile: forced };
+  if (PROFILES.includes(forced as Profile)) return { profile: forced as Profile };
   const hasSettingsSchema = existsSync(path.join(root, 'config/settings_schema.json'));
   const hasShopifyDirs = existsSync(path.join(root, 'sections')) &&
     existsSync(path.join(root, 'snippets')) &&
     existsSync(path.join(root, 'layout/theme.liquid'));
   if (hasSettingsSchema || hasShopifyDirs) return { profile: 'shopify' };
   if (existsSync(path.join(root, 'package.json'))) return { profile: 'js' };
-  return { profile: 'js', warning: 'no known project type, falling back to js profile' };
+  if (POLY_MARKERS.some(m => existsSync(path.join(root, m)))) return { profile: 'poly' };
+  return { profile: 'poly', warning: 'no project manifest found, scanning with the generic profile' };
 }
 
 // Ordered rule tables, first match wins — directory convention takes

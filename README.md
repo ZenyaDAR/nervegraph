@@ -54,7 +54,7 @@ nerve view        [flags]     # serves the interactive map
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--profile <name>` | `auto` | `shopify`, `js`, or `auto` detection |
+| `--profile <name>` | `auto` | `shopify`, `js`, `poly`, or `auto` detection |
 | `--out <dir>` | `.nervegraph` | Where `graph.json` is written |
 | `--ignore <glob>` | — | Extra ignore pattern; repeatable |
 | `--no-gitignore` | off | Don't read `.gitignore` |

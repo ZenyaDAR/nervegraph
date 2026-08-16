@@ -4,6 +4,7 @@ import { detectProfile, classifyNodeType, isEntrypoint } from '../scan/profile.t
 import { langFor } from '../scan/extensions.ts';
 import { VERSION } from '../version.ts';
 import { findLanguage } from '../scan/languages/index.ts';
+import { loadAliases } from '../scan/aliases.ts';
 import { resolveRefs } from './resolve.ts';
 import type { Graph, GraphNode, GraphEdge, UnresolvedRef, Warning, RawRef, Risk } from './types.ts';
 import { SCHEMA_VERSION } from './types.ts';
@@ -49,9 +50,11 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
 
   let pkg: any;
   const pkgPath = path.join(root, 'package.json');
-  if (profile === 'js' && existsSync(pkgPath)) {
+  if (profile !== 'shopify' && existsSync(pkgPath)) {
     try { pkg = JSON.parse(readFileSync(pkgPath, 'utf8')); } catch { /* ignore */ }
   }
+
+  const aliases = loadAliases(root);
 
   const fileById = new Map<string, ScannedFile>();
   for (const f of files) fileById.set(f.id, f);
@@ -111,7 +114,7 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
       }
     }
 
-    const outcome = resolveRefs(file.id, refs, { profile, fileExists, defaultLocale });
+    const outcome = resolveRefs(file.id, refs, { profile, fileExists, defaultLocale, aliases });
     const fileEdges = dedupeEdges(outcome.edges.map(e => ({ ...e, to: realId(e.to) })));
     edges.push(...fileEdges);
     unresolved.push(...outcome.unresolved);

@@ -1,10 +1,13 @@
 import type { RelType } from '../types.ts';
 import type { Profile } from '../../scan/profile.ts';
+import type { AliasRule } from '../../scan/aliases.ts';
 
 export interface ResolveContext {
   profile: Profile;
   fileExists: (id: string) => boolean;
   defaultLocale?: string; // e.g. 'locales/en.default.json'
+  /** Non-relative specifier rules: tsconfig paths, package imports, workspaces. */
+  aliases?: AliasRule[];
 }
 
 export type ResolvedTarget = { id: string; missing: boolean } | 'external';

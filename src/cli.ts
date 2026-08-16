@@ -11,7 +11,7 @@ Usage:
   nerve view           [flags]   Serve an interactive map locally
 
 scan flags:
-  --profile <name>   shopify | js | auto
+  --profile <name>   shopify | js | poly | auto
   --out <dir>        default .nervegraph
   --ignore <glob>     repeatable
   --no-gitignore

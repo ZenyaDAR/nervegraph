@@ -80,7 +80,7 @@ export interface Graph {
   schemaVersion: number;
   tool: string;
   root: string;
-  profile: 'shopify' | 'js';
+  profile: 'shopify' | 'js' | 'poly';
   scannedAt: string;
   durationMs: number;
   stats: {

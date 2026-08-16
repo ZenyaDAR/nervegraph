@@ -70,3 +70,23 @@ test('a missing .min asset with no unminified source is still reported missing',
   assert.equal(out.edges[0].to, 'assets/vendor.min.js');
   assert.ok(out.missingTargets.has('assets/vendor.min.js'));
 });
+
+test('scss @use finds the partial, the plain name, and the index file', () => {
+  const c = (files: string[]) => ({ profile: 'js' as const, fileExists: (id: string) => files.includes(id) });
+  const ref = (target: string): RawRef[] => [{ rel: 'css_import', target, line: 1, raw: '', literal: true }];
+
+  assert.equal(resolveRefs('src/main.scss', ref('base'), c(['src/_base.scss'])).edges[0].to, 'src/_base.scss');
+  assert.equal(resolveRefs('src/main.scss', ref('base'), c(['src/base.scss'])).edges[0].to, 'src/base.scss');
+  assert.equal(resolveRefs('src/main.scss', ref('theme'), c(['src/theme/_index.scss'])).edges[0].to, 'src/theme/_index.scss');
+  assert.equal(resolveRefs('src/main.css', ref('reset.css'), c(['src/reset.css'])).edges[0].to, 'src/reset.css');
+});
+
+test('static imports survive a file the JS lexer cannot parse', async () => {
+  const { scanJavaScript } = await import('../src/scan/scanners/javascript.ts');
+  // Generic arrow in .tsx — the shape that makes es-module-lexer throw.
+  const out = scanJavaScript({
+    id: 'a.tsx',
+    content: "import Button from './Button';\nconst f = <T,>(x: T) => x;\n",
+  });
+  assert.deepEqual(out.refs.map(r => [r.rel, r.target]), [['import', './Button']]);
+});
