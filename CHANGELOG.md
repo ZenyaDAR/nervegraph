@@ -2,6 +2,21 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioning per [SemVer](https://semver.org/).
 
+## [0.3.1] — 2026-08-16
+
+### Fixed
+- **The help card and the issues panel covered the graph on every page load.**
+  Both ship with the `hidden` attribute set, but both declare their own
+  `display` in `app.css`, which outranks the user agent's
+  `[hidden] { display: none }` — so the viewer opened with two overlays on top
+  of the canvas and no way to tell they were meant to be closed. `app.css` now
+  restates the rule with `!important`, and a test fails if a future overlay
+  reintroduces the conflict.
+- **A query string no longer 404s a viewer asset.** `nerve view` matched
+  `req.url` against its route allowlist whole, so `/app.css?v=2` missed. The
+  path is now matched on its own, which makes cache-busting work; the allowlist
+  itself is unchanged, so path traversal is still impossible.
+
 ## [0.3.0] — 2026-08-16
 
 `graph.json` moves to **schema 3** — additive only: new node types, new rel

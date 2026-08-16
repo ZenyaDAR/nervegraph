@@ -1,6 +1,6 @@
 {
   "name": "nervegraph",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Obsidian Graph View, but for source code — scan a JS/TS, Vue/Svelte/Astro, HTML/CSS, Python, Ruby, Rust, Go, PHP, Java/Kotlin, C/C++ or Shopify Liquid project into a dependency graph and browse it interactively.",
   "type": "module",
   "license": "MIT",
