@@ -2,7 +2,7 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioning per [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] — 2026-08-16
 
 `graph.json` moves to **schema 3** — additive only: new node types, new rel
 types and the new `poly` profile value. A consumer that ignores unknown enum

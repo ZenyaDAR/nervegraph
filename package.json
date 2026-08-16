@@ -1,7 +1,7 @@
 {
   "name": "nervegraph",
-  "version": "0.2.1",
-  "description": "Obsidian Graph View, but for source code — scan a JS/TS, HTML/CSS, Python, Ruby, Rust or Shopify Liquid project into a dependency graph and browse it interactively.",
+  "version": "0.3.0",
+  "description": "Obsidian Graph View, but for source code — scan a JS/TS, Vue/Svelte/Astro, HTML/CSS, Python, Ruby, Rust, Go, PHP, Java/Kotlin, C/C++ or Shopify Liquid project into a dependency graph and browse it interactively.",
   "type": "module",
   "license": "MIT",
   "author": "Yevhenii Dziza",
@@ -29,6 +29,11 @@
     "python",
     "ruby",
     "rust",
+    "go",
+    "php",
+    "java",
+    "vue",
+    "monorepo",
     "shopify",
     "liquid",
     "theme"
