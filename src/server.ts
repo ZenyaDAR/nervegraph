@@ -34,7 +34,8 @@ export function createServer(graphPath: string): http.Server {
   } catch { /* watching is a convenience; a missing watcher must not break view */ }
 
   const server = http.createServer(async (req, res) => {
-    const url = req.url ?? '/';
+    // Route on the path alone, so a cache-busting `?v=` still finds the asset.
+    const url = (req.url ?? '/').split('?')[0];
 
     if (url === '/events') {
       res.writeHead(200, {

@@ -1,4 +1,10 @@
 /* Roles and values documented in COLOR_SCHEME.md — change there first. */
+
+/* Panels below set their own display (flex/grid), which outranks the UA's
+   [hidden] { display: none }. Toggling is done via the hidden attribute, so
+   make it win everywhere. */
+[hidden] { display: none !important; }
+
 :root {
   --page: #0d0d0d;
   --canvas-bg: #1a1a19;
