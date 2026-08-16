@@ -8,6 +8,13 @@ export interface ResolveContext {
   defaultLocale?: string; // e.g. 'locales/en.default.json'
   /** Non-relative specifier rules: tsconfig paths, package imports, workspaces. */
   aliases?: AliasRule[];
+  /** composer.json's PSR-4 autoload map, for PHP `use` statements. */
+  psr4?: AliasRule[];
+  /** The `module` path from go.mod, for telling own packages from vendored ones. */
+  goModule?: string;
+  /** Files directly inside a directory. Needed where an import names a
+   *  directory rather than a file (a Go package, a Terraform module). */
+  listDir?: (dir: string) => string[];
 }
 
 export type ResolvedTarget = { id: string; missing: boolean } | 'external';

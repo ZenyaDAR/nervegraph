@@ -4,6 +4,32 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), versioning per 
 
 ## [Unreleased]
 
+`graph.json` moves to **schema 3** — additive only: new node types, new rel
+types and the new `poly` profile value. A consumer that ignores unknown enum
+values, as the schema requires, reads it unchanged.
+
+### Added
+- **Single-file components** — `.vue`, `.svelte` and `.astro` are scanned by
+  running the existing HTML, JavaScript and style passes over the file's
+  regions. They used to be opaque leaf nodes with no edges at all, which hid
+  the component tree of every modern frontend.
+- **Go** — `import` (single and grouped), resolved against the `module` line of
+  `go.mod`; only the repo's own packages become edges.
+- **PHP** — `require`/`include` paths, and `use` statements resolved through
+  composer.json's PSR-4/PSR-0 autoload map.
+- **Java / Kotlin** — `import a.b.C` resolved under `src/main/java`,
+  `src/main/kotlin` and the flat layouts, including nested classes.
+- **C / C++** — `#include "x.h"` resolved next to the file and under
+  `include/`, `src/`, `lib/`; `<angle>` includes are external.
+- **Markdown** — links and images that point at project files, so docs join the
+  graph. Fenced code blocks and in-page anchors are ignored.
+- **Shell** (`source x.sh`) and **Terraform** (`module { source = "./…" }`).
+- New node types `component`, `go`, `php`, `java`, `c`, `markdown` and rel types
+  `go_import`, `php_require`, `php_use`, `java_import`, `c_include`, `md_link`,
+  `sh_source`, `tf_module`.
+- `ResolveContext` gained `listDir`, so a resolver can handle an import that
+  names a directory (a Go package, a Terraform module) rather than a file.
+
 ### Added
 - **Non-relative import resolution** — `tsconfig.json`/`jsconfig.json` `paths`
   and `baseUrl`, `package.json` `imports` (`#alias`), and npm/pnpm workspace
@@ -17,6 +43,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), versioning per 
   type" warning.
 
 ### Fixed
+- An external URL in `unresolved` was labelled "name comes from a variable or
+  expression"; it now says so.
 - A file the JS lexer cannot parse (a `.tsx` with generic arrows is the usual
   case) lost every static import: the fallback pass only matched `import()` and
   `require()`. It now matches `import … from '…'` and `export … from '…'` too.

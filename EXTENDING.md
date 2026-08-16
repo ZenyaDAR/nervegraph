@@ -58,6 +58,16 @@ of the relation, not of who emitted it.
    `blank` (blank out comments without shifting offsets, so line numbers stay
    correct) and `isExternalUrl`.
 
+   A file that embeds other languages doesn't need a new scanner for each part:
+   `scanners/component.ts` (`.vue`/`.svelte`/`.astro`) runs the HTML, JavaScript
+   and style passes over the regions it finds and shifts their line numbers by
+   the region's offset.
+
+   A file that embeds other languages doesn't need a new scanner for each part:
+   `scanners/component.ts` (`.vue`/`.svelte`/`.astro`) runs the HTML, JavaScript
+   and style passes over the regions it finds and shifts their line numbers by
+   the region's offset.
+
 3. Register it in `src/scan/languages/index.ts`'s `LANGUAGES` array:
 
    ```ts
@@ -80,6 +90,40 @@ of the relation, not of who emitted it.
 If your scanner can throw on malformed input (like `css.ts` and
 `shopify-json.ts` do), that's fine: `build.ts` wraps every `scan()` call in a
 try/catch and records a `parse_error` warning automatically.
+
+### When an import names a directory
+
+A Go package or a Terraform module is a *directory*, but graph nodes are files.
+`ResolveContext.listDir(dir)` gives a resolver the ids directly inside a
+directory so it can pick the file that stands for it (see `packageFile` in
+`resolvers/languages.ts`). The index is built once in `build.ts`; don't scan the
+id set yourself.
+
+### Config a resolver may need
+
+Project-level facts that resolution depends on are loaded once in
+`src/scan/aliases.ts` and handed to every resolver through `ResolveContext`:
+`aliases` (tsconfig `paths`/`baseUrl`, package.json `imports`, workspaces),
+`psr4` (composer autoload) and `goModule` (the `module` line of go.mod). Add a
+loader there rather than reading a config file from inside a resolver — a
+resolver is called once per reference.
+
+### When an import names a directory
+
+A Go package or a Terraform module is a *directory*, but graph nodes are files.
+`ResolveContext.listDir(dir)` gives a resolver the ids directly inside a
+directory so it can pick the file that stands for it (see `packageFile` in
+`resolvers/languages.ts`). The index is built once in `build.ts`; don't scan the
+id set yourself.
+
+### Config a resolver may need
+
+Project-level facts that resolution depends on are loaded once in
+`src/scan/aliases.ts` and handed to every resolver through `ResolveContext`:
+`aliases` (tsconfig `paths`/`baseUrl`, package.json `imports`, workspaces),
+`psr4` (composer autoload) and `goModule` (the `module` line of go.mod). Add a
+loader there rather than reading a config file from inside a resolver — a
+resolver is called once per reference.
 
 ### What counts as `missing` vs `external`
 

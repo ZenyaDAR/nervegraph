@@ -34,6 +34,35 @@ export function expandAlias(spec: string, rules: AliasRule[]): string[] {
   return out.map(normalizeRel).filter(p => p !== undefined) as string[];
 }
 
+/** The `module` line of go.mod: the import-path prefix of the repo's own packages. */
+export function loadGoModule(root: string): string | undefined {
+  const file = path.join(root, 'go.mod');
+  if (!existsSync(file)) return undefined;
+  const m = /^\s*module\s+(\S+)/m.exec(readFileSync(file, 'utf8'));
+  return m?.[1];
+}
+
+/** composer.json's PSR-4/PSR-0 autoload map, as alias rules over '/'-joined names. */
+export function loadPsr4(root: string): AliasRule[] {
+  const composer = readJson(path.join(root, 'composer.json'));
+  if (!composer) return [];
+  const rules: AliasRule[] = [];
+  for (const key of ['autoload', 'autoload-dev']) {
+    const block = composer[key];
+    for (const std of ['psr-4', 'psr-0']) {
+      const map = block?.[std];
+      if (!map || typeof map !== 'object') continue;
+      for (const [ns, dirs] of Object.entries(map)) {
+        const targets = (Array.isArray(dirs) ? dirs : [dirs])
+          .filter((d): d is string => typeof d === 'string')
+          .map(d => `${stripDot(d)}/*`);
+        if (targets.length) rules.push({ prefix: `${ns.replace(/\\/g, '/')}*`, targets });
+      }
+    }
+  }
+  return rules;
+}
+
 export function loadAliases(root: string): AliasRule[] {
   return [
     ...fromTsconfig(root),

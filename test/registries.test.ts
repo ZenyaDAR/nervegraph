@@ -48,6 +48,14 @@ test('language registry claims every language nervegraph advertises', () => {
     ['a.py', 'python'], ['a.pyi', 'python'],
     ['a.rb', 'ruby'], ['a.rake', 'ruby'], ['a.gemspec', 'ruby'],
     ['a.rs', 'rust'],
+    ['a.vue', 'component'], ['a.svelte', 'component'], ['a.astro', 'component'],
+    ['a.go', 'go'],
+    ['a.php', 'php'], ['a.phtml', 'php'],
+    ['a.java', 'jvm'], ['a.kt', 'jvm'], ['a.kts', 'jvm'],
+    ['a.c', 'clang'], ['a.h', 'clang'], ['a.cpp', 'clang'], ['a.hpp', 'clang'],
+    ['a.md', 'markdown'], ['a.mdx', 'markdown'],
+    ['a.sh', 'shell'],
+    ['a.tf', 'terraform'],
   ];
   for (const [file, langId] of expected) {
     assert.equal(findLanguage(file, { profile: 'js' })?.id, langId, `${file} should be claimed by ${langId}`);

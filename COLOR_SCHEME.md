@@ -61,15 +61,27 @@ alone. Dark mode clears 3:1 contrast on all 8 slots outright.
 
 | Slot | Hue | Light | Dark | Node types |
 |---|---|---|---|---|
-| 1 | blue | `#2a78d6` | `#3987e5` | `section`, `section_group`, `python` |
-| 2 | orange | `#eb6834` | `#d95926` | `layout`, `html` |
-| 3 | aqua | `#1baf7a` | `#199e70` | `snippet`, `rust` |
+| 1 | blue | `#2a78d6` | `#3987e5` | `section`, `section_group`, `python`, `java` |
+| 2 | orange | `#eb6834` | `#d95926` | `layout`, `html`, `markdown` |
+| 3 | aqua | `#1baf7a` | `#199e70` | `snippet`, `rust`, `go` |
 | 4 | yellow | `#eda100` | `#c98500` | `javascript` (JS **and** TS) |
-| 5 | magenta | `#e87ba4` | `#d55181` | `template`, `template_json` |
-| 6 | green | `#008300` | `#008300` | `block`, `ruby` |
+| 5 | magenta | `#e87ba4` | `#d55181` | `template`, `template_json`, `component`, `c` |
+| 6 | green | `#008300` | `#008300` | `block`, `ruby`, `php` |
 | 7 | violet | `#4a3aa7` | `#9085e9` | `css` |
 | 8 | red | `#e34948` | `#e66767` | `json` |
 | — | other (gray) | `#898781` | `#898781` | `asset`, `unknown` |
+
+Slot-mates are picked so they don't realistically share a repo: Vue/Svelte
+components and C sources, Go and Rust, PHP and Ruby, Java and Python. Two of
+those pairings *can* co-occur in a genuinely polyglot repo (Python + Java in a
+data project, Markdown + HTML in a docs site) — that is what the viewer's
+**color by language** mode is for: it assigns the same eight slots to whatever
+languages the graph in front of you actually contains, so identity is never
+ambiguous in practice.
+
+`shell` and `hcl` files are scanned for references but have no node type of
+their own; they render in the "Other" grey. A colour slot is scarcer than they
+are common.
 
 TypeScript deliberately shares the `javascript` slot: the distinction is carried
 by the node's `lang` field, and splitting one concern across two hues would
@@ -97,11 +109,16 @@ color chip.
 
 | Group | Rel types | Dark | Light | Style |
 |---|---|---|---|---|
-| structural | `render`, `include`, `section`, `section_group`, `template_section`, `content_for`, `rust_mod` | `#4a5568` | `#9096a6` | solid |
-| code | `import`, `require`, `dynamic_import`, `css_import`, `py_import`, `rb_require`, `rb_require_relative` | `#5a6478` | `#9aa3b8` | dashed |
-| resource | `asset`, `asset_url`, `script_src`, `link_href` | `#3f4a5a` | `#7c8794` | solid |
+| structural | `render`, `include`, `section`, `section_group`, `template_section`, `content_for`, `rust_mod`, `tf_module` | `#4a5568` | `#9096a6` | solid |
+| code | `import`, `require`, `dynamic_import`, `css_import`, `py_import`, `rb_require`, `rb_require_relative`, `go_import`, `php_require`, `php_use`, `java_import`, `c_include`, `sh_source` | `#5a6478` | `#9aa3b8` | dashed |
+| resource | `asset`, `asset_url`, `script_src`, `link_href`, `md_link` | `#3f4a5a` | `#7c8794` | solid |
 | class usage | `class_usage` | `#4a4458` | `#9b8fae` | thin dashed |
 | translation | `translation` | `#3f4a5a` | `#7c8794` | solid, hidden by default |
+
+`tf_module` joins `rust_mod` as **structural** for the same reason: a module
+block is what pulls a directory into the configuration. `md_link` is grouped as
+a **resource** edge — a doc pointing at another doc references it, it doesn't
+include it.
 
 `rust_mod` is grouped as **structural**, not code: `mod foo;` is what pulls a
 file into the crate, so it defines the module tree the way a Liquid `render`

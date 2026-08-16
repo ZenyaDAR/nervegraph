@@ -51,5 +51,6 @@ export function resolveRefs(fromId: string, refs: RawRef[], ctx: ResolveContext)
 
 function hintFor(ref: RawRef): string {
   if (ref.value === 'concatenated') return 'string is built via filters (append/prepend)';
+  if (ref.value === 'external') return 'external URL';
   return 'name comes from a variable or expression';
 }

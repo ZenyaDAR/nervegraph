@@ -8,6 +8,9 @@ import path from 'node:path';
 export type Lang =
   | 'javascript' | 'typescript' | 'html' | 'css' | 'liquid'
   | 'python' | 'ruby' | 'rust' | 'json'
+  | 'vue' | 'svelte' | 'astro'
+  | 'go' | 'php' | 'java' | 'kotlin' | 'c' | 'cpp'
+  | 'markdown' | 'shell' | 'hcl'
   | 'svg' | 'image' | 'other';
 
 // Extensions whose contents we parse. Anything here is read into memory and
@@ -22,6 +25,16 @@ export const SOURCE_EXT: Record<string, Lang> = {
   '.rb': 'ruby', '.rake': 'ruby', '.gemspec': 'ruby',
   '.rs': 'rust',
   '.json': 'json',
+  // Single-file components: markup + script + style in one file.
+  '.vue': 'vue', '.svelte': 'svelte', '.astro': 'astro',
+  '.go': 'go',
+  '.php': 'php', '.phtml': 'php',
+  '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin',
+  '.c': 'c', '.h': 'c',
+  '.cc': 'cpp', '.cpp': 'cpp', '.cxx': 'cpp', '.hpp': 'cpp', '.hh': 'cpp', '.hxx': 'cpp',
+  '.md': 'markdown', '.mdx': 'markdown', '.markdown': 'markdown',
+  '.sh': 'shell', '.bash': 'shell', '.zsh': 'shell',
+  '.tf': 'hcl', '.tfvars': 'hcl',
 };
 
 // Binary/opaque leaves: they can be edge *targets* (a CSS url(), a Shopify

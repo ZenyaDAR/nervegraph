@@ -53,7 +53,16 @@ const LANG_NODE_TYPE: Partial<Record<Lang, NodeType>> = {
   python: 'python',
   ruby: 'ruby',
   rust: 'rust',
+  vue: 'component', svelte: 'component', astro: 'component',
+  go: 'go',
+  php: 'php',
+  java: 'java', kotlin: 'java',
+  c: 'c', cpp: 'c',
+  markdown: 'markdown',
   json: 'json',
+  // shell and hcl are scanned for references but carry no node type of their
+  // own — they render in the "Other" grey. A colour slot is scarcer than they
+  // are common (see COLOR_SCHEME.md).
 };
 
 export function classifyNodeType(id: string, profile: Profile): NodeType {
@@ -111,6 +120,18 @@ const GENERIC_ENTRYPOINTS: RegExp[] = [
   // Rust — crate roots and binary targets
   /^(src\/)?(main|lib)\.rs$/,
   /^src\/bin\/[^/]+\.rs$/,
+  // Go — the package main file, and the conventional cmd/<name>/ layout
+  /^(cmd\/[^/]+\/)?main\.go$/,
+  // Java / Kotlin — a main class is entered from outside the source graph
+  /^src\/main\/(java|kotlin)\/.*\/(Main|Application)\.(java|kt)$/,
+  // C / C++ — the translation unit holding main() is conventionally named
+  /^(src\/)?main\.(c|cc|cpp|cxx)$/,
+  // PHP — front controllers
+  /^(public\/|web\/)?index\.php$/,
+  // Docs — a README is entered by a human, not by a link
+  /^(.*\/)?README\.(md|markdown)$/,
+  // Terraform — the root module
+  /^(.*\/)?main\.tf$/,
   // Python — scripts and package mains
   /^(src\/)?(main|app|manage|setup|wsgi|asgi)\.py$/,
   /^(.*\/)?__main__\.py$/,

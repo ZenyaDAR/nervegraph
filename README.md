@@ -3,7 +3,8 @@
 > Obsidian Graph View, but for source code.
 > One command scans the project, another opens an interactive relationship map in the browser.
 >
-> Liquid · JavaScript · TypeScript · HTML · CSS · Python · Ruby · Rust
+> Liquid · JavaScript · TypeScript · Vue/Svelte/Astro · HTML · CSS · Python · Ruby ·
+> Rust · Go · PHP · Java/Kotlin · C/C++ · Markdown · Shell · Terraform
 
 ```bash
 npx nervegraph scan     # → .nervegraph/graph.json
@@ -108,6 +109,14 @@ nerve scan --quiet && cat .nervegraph/graph.json
 | Python | `.py` `.pyi` | `import x`, `from x import y`, relative `from .x import y` |
 | Ruby | `.rb` `.rake` `.gemspec` | `require`, `require_relative` |
 | Rust | `.rs` | `mod x;` (the declarations that pull files into the crate) |
+| Vue / Svelte / Astro | `.vue` `.svelte` `.astro` | the `<script>` imports, `<style>` `@use`/`url()`, and template `src` attributes |
+| Go | `.go` | `import "…"` inside the repo's own module (from `go.mod`) |
+| PHP | `.php` `.phtml` | `require`/`include`, and `use` through composer's PSR-4 map |
+| Java / Kotlin | `.java` `.kt` `.kts` | `import a.b.C` under the Maven/Gradle source root |
+| C / C++ | `.c` `.h` `.cc` `.cpp` `.hpp` … | `#include "x.h"` (angle-bracket includes are external) |
+| Markdown | `.md` `.mdx` | links and images pointing at project files |
+| Shell | `.sh` `.bash` `.zsh` | `source x.sh` / `. x.sh` |
+| Terraform | `.tf` `.tfvars` | `module { source = "./…" }` |
 | Shopify JSON | `templates/*.json`, `sections/*.json` | `sections.*.type` |
 
 Third-party references stay out of the graph: `import requests`, `require
@@ -130,8 +139,16 @@ Deliberate, and cheaper to state than to hide:
   starts with `import x`.
 - **ERB `<%= %>` inside an HTML attribute is skipped**, because the `>` in `%>`
   ends the tag match. `.html.erb` isn't a scanned extension.
-- **Aliases** (`tsconfig.json` `paths`, `package.json` `imports`) resolve as
-  external rather than inventing a wrong edge.
+- **A Go import resolves to one file of the package**, not to all of them —
+  the package's own `<name>.go` if it exists, otherwise its first source. Nodes
+  are files, and a package is a directory.
+- **Java's same-package references are invisible**, because they need no
+  `import`; only cross-package coupling shows up.
+- **`import a.b.*` and `use App\{A, B}` are skipped** rather than expanded to
+  an arbitrary member of the package.
+- **Aliases are resolved from a single root config.** `tsconfig.json`
+  `extends` chains and per-package tsconfigs in a monorepo are not followed;
+  workspace package names are.
 
 ---
 
@@ -156,7 +173,8 @@ can read the map instead of grepping the whole repo.
 | Liquid / HTML | Regex over tags, not a full AST | Reference tags are trivially regular |
 | JS | `es-module-lexer` + regex for `require` | A full Babel AST is overkill for v0.1 |
 | CSS | `postcss` | Correctly extracts `@import` and selectors |
-| Python / Ruby / Rust | Line-oriented regex, zero dependencies | Import syntax in all three is regular; a per-language parser would be 3 more dependencies for the same edges |
+| Python, Ruby, Rust, Go, PHP, Java/Kotlin, C/C++, Markdown, Shell, Terraform | Line-oriented regex, zero dependencies | Import syntax in all of them is regular; a per-language parser would be one more dependency each for the same edges |
+| Vue / Svelte / Astro | Split the file, reuse the HTML, JS and style passes | A SFC is three languages in one file, and all three scanners already exist |
 | Visualization | `force-graph` (vasturiano), canvas | Drag, zoom, highlight, 5k+ nodes out of the box |
 | Frontend framework | None. Vanilla JS + one HTML file | The detail panel is 150 lines of DOM |
 | Storage | A single `graph.json` | SQLite at 100k+ nodes, not before |

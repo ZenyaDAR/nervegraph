@@ -8,6 +8,14 @@ import { scanCss } from '../scanners/css.ts';
 import { scanPython } from '../scanners/python.ts';
 import { scanRuby } from '../scanners/ruby.ts';
 import { scanRust } from '../scanners/rust.ts';
+import { scanComponent } from '../scanners/component.ts';
+import { scanGo } from '../scanners/go.ts';
+import { scanPhp } from '../scanners/php.ts';
+import { scanJvm } from '../scanners/jvm.ts';
+import { scanClang } from '../scanners/clang.ts';
+import { scanMarkdown } from '../scanners/markdown.ts';
+import { scanShell } from '../scanners/shell.ts';
+import { scanTerraform } from '../scanners/terraform.ts';
 import type { Scanner } from '../../graph/types.ts';
 
 /**
@@ -37,6 +45,14 @@ const LANGUAGES: LanguageModule[] = [
   byLang('python', ['python'], scanPython),
   byLang('ruby', ['ruby'], scanRuby),
   byLang('rust', ['rust'], scanRust),
+  byLang('component', ['vue', 'svelte', 'astro'], scanComponent),
+  byLang('go', ['go'], scanGo),
+  byLang('php', ['php'], scanPhp),
+  byLang('jvm', ['java', 'kotlin'], scanJvm),
+  byLang('clang', ['c', 'cpp'], scanClang),
+  byLang('markdown', ['markdown'], scanMarkdown),
+  byLang('shell', ['shell'], scanShell),
+  byLang('terraform', ['hcl'], scanTerraform),
 ];
 
 export type { LanguageModule, LanguageContext } from './types.ts';

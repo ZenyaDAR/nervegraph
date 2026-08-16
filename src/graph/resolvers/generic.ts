@@ -97,4 +97,6 @@ export const genericResolvers: RelResolver[] = [
   // `asset_url`, so a theme's own stylesheet can still say url("../img/x.png")
   // and resolve correctly.
   { rel: 'asset', resolve: resolveDirRelative },
+  // A PHP require/include spells a real path, extension and all.
+  { rel: 'php_require', resolve: resolveDirRelative },
 ];

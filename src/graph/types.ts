@@ -1,7 +1,11 @@
 // 2: node type `module` folded into `javascript`; added `html`/`python`/
 // `ruby`/`rust` node types; split the Shopify `asset_url` convention out of
 // the path-shaped `asset` relation.
-export const SCHEMA_VERSION = 2;
+// 3: additive only — new node types (`component`, `go`, `php`, `java`, `c`,
+// `markdown`), new rel types for those languages, and the new `poly` profile
+// value. A schema-2 consumer that ignores unknown enum values (as 3.9 requires)
+// reads a schema-3 graph unchanged.
+export const SCHEMA_VERSION = 3;
 
 // Declared as runtime arrays, with the TypeScript unions derived from them, so
 // that consumers (the viewer's color tables, the resolver registry) can be
@@ -13,6 +17,7 @@ export const NODE_TYPES = [
   'snippet', 'block',
   // language-generic
   'javascript', 'html', 'css', 'python', 'ruby', 'rust',
+  'component', 'go', 'php', 'java', 'c', 'markdown',
   'json', 'asset', 'unknown',
 ] as const;
 
@@ -28,6 +33,8 @@ export const REL_TYPES = [
   'css_import',
   // other languages
   'py_import', 'rb_require', 'rb_require_relative', 'rust_mod',
+  'go_import', 'php_require', 'php_use', 'java_import', 'c_include',
+  'md_link', 'sh_source', 'tf_module',
 ] as const;
 
 export type NodeType = typeof NODE_TYPES[number];

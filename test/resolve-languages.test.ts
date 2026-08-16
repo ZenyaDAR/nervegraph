@@ -149,3 +149,85 @@ test('css url() is path-shaped even under the shopify profile', () => {
   });
   assert.equal(out.edges[0].to, 'fonts/x.woff');
 });
+
+// ── wave B languages ───────────────────────────────────────────────────────
+
+function polyCtx(files: string[], extra: Record<string, unknown> = {}) {
+  const set = new Set(files);
+  const dirs = new Map<string, string[]>();
+  for (const f of files) {
+    const i = f.lastIndexOf('/');
+    const d = i < 0 ? '' : f.slice(0, i);
+    dirs.set(d, [...(dirs.get(d) ?? []), f]);
+  }
+  return {
+    profile: 'poly' as const,
+    fileExists: (id: string) => set.has(id),
+    listDir: (dir: string) => dirs.get(dir) ?? [],
+    ...extra,
+  };
+}
+
+test('go: own-module imports resolve to a package file, others stay external', () => {
+  const c = polyCtx(['internal/store/store.go', 'internal/store/query.go', 'main.go'], { goModule: 'example.com/m' });
+  const refs = (t: string): RawRef[] => [{ rel: 'go_import', target: t, line: 1, raw: '', literal: true }];
+
+  assert.equal(resolveRefs('main.go', refs('example.com/m/internal/store'), c).edges[0].to, 'internal/store/store.go');
+  assert.equal(resolveRefs('main.go', refs('fmt'), c).unresolved[0].reason, 'external');
+  assert.equal(resolveRefs('main.go', refs('github.com/pkg/errors'), c).unresolved[0].reason, 'external');
+  // A package the module claims but that isn't on disk is a real break.
+  assert.ok(resolveRefs('main.go', refs('example.com/m/internal/gone'), c).missingTargets.has('internal/gone/gone.go'));
+});
+
+test('php: use resolves through the composer psr-4 map, require through the path', () => {
+  const c = polyCtx(['src/Models/User.php', 'src/bootstrap.php'], {
+    psr4: [{ prefix: 'App/*', targets: ['src/*'] }],
+  });
+  const use: RawRef[] = [{ rel: 'php_use', target: 'App\\Models\\User', line: 1, raw: '', literal: true }];
+  const vendor: RawRef[] = [{ rel: 'php_use', target: 'Symfony\\Component\\Console', line: 2, raw: '', literal: true }];
+  const req: RawRef[] = [{ rel: 'php_require', target: 'bootstrap.php', line: 3, raw: '', literal: true }];
+
+  assert.equal(resolveRefs('src/Kernel.php', use, c).edges[0].to, 'src/Models/User.php');
+  assert.equal(resolveRefs('src/Kernel.php', vendor, c).unresolved[0].reason, 'external');
+  assert.equal(resolveRefs('src/Kernel.php', req, c).edges[0].to, 'src/bootstrap.php');
+});
+
+test('java: imports resolve under the maven source root, the JDK stays external', () => {
+  const c = polyCtx(['src/main/java/app/svc/Store.java', 'src/main/kotlin/app/Util.kt']);
+  const ref = (t: string): RawRef[] => [{ rel: 'java_import', target: t, line: 1, raw: '', literal: true }];
+
+  assert.equal(resolveRefs('src/main/java/app/Main.java', ref('app.svc.Store'), c).edges[0].to, 'src/main/java/app/svc/Store.java');
+  assert.equal(resolveRefs('src/main/java/app/Main.java', ref('app.Util'), c).edges[0].to, 'src/main/kotlin/app/Util.kt');
+  // A nested class lives in its outer class's file.
+  assert.equal(resolveRefs('src/main/java/app/Main.java', ref('app.svc.Store.Row'), c).edges[0].to, 'src/main/java/app/svc/Store.java');
+  assert.equal(resolveRefs('src/main/java/app/Main.java', ref('java.util.List'), c).unresolved[0].reason, 'external');
+});
+
+test('c: includes resolve next to the file and under include/', () => {
+  const c = polyCtx(['src/main.c', 'src/util.h', 'include/api.h']);
+  const ref = (t: string): RawRef[] => [{ rel: 'c_include', target: t, line: 1, raw: '', literal: true }];
+
+  assert.equal(resolveRefs('src/main.c', ref('util.h'), c).edges[0].to, 'src/util.h');
+  assert.equal(resolveRefs('src/main.c', ref('api.h'), c).edges[0].to, 'include/api.h');
+  assert.ok(resolveRefs('src/main.c', ref('gone.h'), c).missingTargets.has('src/gone.h'));
+});
+
+test('markdown: file links resolve, extensionless routes are external', () => {
+  const c = polyCtx(['docs/02-cli.md', 'docs/guide/README.md', 'src/graph/build.ts']);
+  const ref = (t: string): RawRef[] => [{ rel: 'md_link', target: t, line: 1, raw: '', literal: true }];
+
+  assert.equal(resolveRefs('docs/index.md', ref('./02-cli.md'), c).edges[0].to, 'docs/02-cli.md');
+  assert.equal(resolveRefs('docs/index.md', ref('guide'), c).edges[0].to, 'docs/guide/README.md');
+  assert.equal(resolveRefs('docs/index.md', ref('../src/graph/build.ts'), c).edges[0].to, 'src/graph/build.ts');
+  assert.equal(resolveRefs('docs/index.md', ref('getting-started'), c).unresolved[0].reason, 'external');
+  assert.ok(resolveRefs('docs/index.md', ref('./gone.md'), c).missingTargets.has('docs/gone.md'));
+});
+
+test('shell and terraform resolve to the sourced file and the module directory', () => {
+  const c = polyCtx(['scripts/build.sh', 'scripts/lib/log.sh', 'main.tf', 'modules/vpc/main.tf']);
+  const sh: RawRef[] = [{ rel: 'sh_source', target: './lib/log.sh', line: 1, raw: '', literal: true }];
+  const tf: RawRef[] = [{ rel: 'tf_module', target: './modules/vpc', line: 1, raw: '', literal: true }];
+
+  assert.equal(resolveRefs('scripts/build.sh', sh, c).edges[0].to, 'scripts/lib/log.sh');
+  assert.equal(resolveRefs('main.tf', tf, c).edges[0].to, 'modules/vpc/main.tf');
+});

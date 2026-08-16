@@ -4,7 +4,7 @@ import { detectProfile, classifyNodeType, isEntrypoint } from '../scan/profile.t
 import { langFor } from '../scan/extensions.ts';
 import { VERSION } from '../version.ts';
 import { findLanguage } from '../scan/languages/index.ts';
-import { loadAliases } from '../scan/aliases.ts';
+import { loadAliases, loadGoModule, loadPsr4 } from '../scan/aliases.ts';
 import { resolveRefs } from './resolve.ts';
 import type { Graph, GraphNode, GraphEdge, UnresolvedRef, Warning, RawRef, Risk } from './types.ts';
 import { SCHEMA_VERSION } from './types.ts';
@@ -55,6 +55,8 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
   }
 
   const aliases = loadAliases(root);
+  const psr4 = loadPsr4(root);
+  const goModule = loadGoModule(root);
 
   const fileById = new Map<string, ScannedFile>();
   for (const f of files) fileById.set(f.id, f);
@@ -81,6 +83,20 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
   function fileExists(id: string): boolean {
     return byLowerId.has(id.toLowerCase());
   }
+  // Directory -> the ids directly inside it. Built once: a Go package import
+  // or a Terraform module source names a directory, and scanning every id per
+  // reference to find its contents would be quadratic.
+  const dirIndex = new Map<string, string[]>();
+  for (const id of existingIds) {
+    const slash = id.lastIndexOf('/');
+    const dir = slash < 0 ? '' : id.slice(0, slash);
+    const list = dirIndex.get(dir);
+    if (list) list.push(id); else dirIndex.set(dir, [id]);
+  }
+  function listDir(dir: string): string[] {
+    return dirIndex.get(dir) ?? [];
+  }
+
   function realId(id: string): string {
     const key = id.toLowerCase();
     if (ambiguousLowerIds.has(key)) return id;
@@ -114,7 +130,7 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
       }
     }
 
-    const outcome = resolveRefs(file.id, refs, { profile, fileExists, defaultLocale, aliases });
+    const outcome = resolveRefs(file.id, refs, { profile, fileExists, defaultLocale, aliases, psr4, goModule, listDir });
     const fileEdges = dedupeEdges(outcome.edges.map(e => ({ ...e, to: realId(e.to) })));
     edges.push(...fileEdges);
     unresolved.push(...outcome.unresolved);
