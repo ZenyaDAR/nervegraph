@@ -9,3 +9,5 @@ coverage/
 .env
 .env.*
 .DS_Store
+.mcp.json
+.playwright-mcp/
