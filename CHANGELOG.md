@@ -48,6 +48,14 @@ values, as the schema requires, reads it unchanged.
   jumping to the alphabetically first hit.
 - **Theme button** (light / dark / follow system) and a **`?` card** with the
   keyboard shortcuts and how to read the graph.
+- **`nerve query <file>`** — the agent-facing card from docs/07: what uses this
+  file, what it uses, its risk, its transitive dependent count, and whether the
+  file changed since the scan. `--json` prints nothing else, so it is
+  pipe-safe. List forms: `--orphans`, `--missing`, `--unresolved`,
+  `--risk <level>`, and `--depth <n>` for the neighbourhood.
+- **`nerve scan --watch`** — re-scan on change, debounced, skipping its own
+  output. `nerve view` now serves an SSE stream and the viewer reloads itself
+  when graph.json changes, so a watched scan and an open map stay in step.
 
 ### Added
 - **Non-relative import resolution** — `tsconfig.json`/`jsconfig.json` `paths`

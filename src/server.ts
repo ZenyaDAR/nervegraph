@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { watch } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,8 +16,37 @@ const STATIC_ROUTES: Record<string, { file: string; type: string }> = {
 };
 
 export function createServer(graphPath: string): http.Server {
-  return http.createServer(async (req, res) => {
+  // Live reload: the viewer subscribes here and the server nudges it whenever
+  // graph.json changes on disk, which is what `nerve scan --watch` produces.
+  // One-way and text-only, so it needs no client library and no protocol.
+  const clients = new Set<http.ServerResponse>();
+  let notifyTimer: NodeJS.Timeout | undefined;
+
+  try {
+    watch(graphPath, () => {
+      // An atomic write is a rename, and editors fire several events per save;
+      // one debounce keeps that down to a single reload.
+      clearTimeout(notifyTimer);
+      notifyTimer = setTimeout(() => {
+        for (const client of clients) client.write('event: graph\ndata: changed\n\n');
+      }, 150);
+    }).unref();
+  } catch { /* watching is a convenience; a missing watcher must not break view */ }
+
+  const server = http.createServer(async (req, res) => {
     const url = req.url ?? '/';
+
+    if (url === '/events') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+      res.write('retry: 2000\n\n');
+      clients.add(res);
+      req.on('close', () => clients.delete(res));
+      return;
+    }
 
     if (url === '/graph.json') {
       try {
@@ -46,4 +76,12 @@ export function createServer(graphPath: string): http.Server {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('not found');
   });
+
+  // Otherwise an open EventSource keeps the process alive after Ctrl+C.
+  server.on('close', () => {
+    for (const client of clients) client.end();
+    clients.clear();
+  });
+
+  return server;
 }

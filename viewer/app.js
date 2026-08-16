@@ -200,12 +200,33 @@
     updateStatusBar();
     wireTopLevelUI();
 
+    subscribeToGraphChanges();
+
     lightModeQuery?.addEventListener?.('change', () => {
       themeColors = readThemeColors();
       categoryColorCache = null;
       renderLegend();
       refreshHighlight();
     });
+  }
+
+  // `nerve scan --watch` rewrites graph.json; the server turns that into an
+  // SSE event. Reloading the page is the honest way to apply it: node
+  // positions, filters and the selection all rebuild from persisted state
+  // anyway, and a partial in-place merge would be a second code path for the
+  // same job.
+  function subscribeToGraphChanges() {
+    if (!window.EventSource) return;
+    const events = new EventSource('/events');
+    events.addEventListener('graph', () => {
+      const banner = document.getElementById('perf-banner');
+      banner.textContent = 'graph changed — reloading';
+      banner.hidden = false;
+      setTimeout(() => location.reload(), 300);
+    });
+    // A dropped connection just means `nerve view` stopped; EventSource
+    // reconnects on its own, so there is nothing to report.
+    events.onerror = () => {};
   }
 
   function buildFilterUI(allTypes, allRels) {

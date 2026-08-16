@@ -47,8 +47,9 @@ Requires **Node ≥ 22.6**.
 ## Usage
 
 ```bash
-nerve scan [path] [flags]     # writes .nervegraph/graph.json
-nerve view        [flags]     # serves the interactive map
+nerve scan  [path] [flags]    # writes .nervegraph/graph.json
+nerve view         [flags]    # serves the interactive map
+nerve query <file> [flags]    # what uses this file, and what it uses
 ```
 
 ### `nerve scan`
@@ -56,6 +57,7 @@ nerve view        [flags]     # serves the interactive map
 | Flag | Default | What it does |
 |---|---|---|
 | `--profile <name>` | `auto` | `shopify`, `js`, `poly`, or `auto` detection |
+| `--watch` | off | re-scan on change; an open viewer reloads itself |
 | `--out <dir>` | `.nervegraph` | Where `graph.json` is written |
 | `--ignore <glob>` | — | Extra ignore pattern; repeatable |
 | `--no-gitignore` | off | Don't read `.gitignore` |
@@ -77,7 +79,28 @@ always skipped.
 
 In the viewer: click a node for its dependents and dependencies, `/` or
 `Ctrl+K` to search, and use the sidebar to filter by language, relation type,
-or to isolate orphans, high-risk files and broken links.
+or to isolate orphans, high-risk files and broken links. `?` shows the rest —
+colour and size modes, the issues panel (`i`), shift-click to trace the path
+between two files, and the focus controls.
+
+### `nerve query`
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--json` | off | The card as JSON and nothing else — pipe-safe |
+| `--depth <n>` | — | Also list files within n hops |
+| `--orphans` | off | List every file nothing references |
+| `--missing` | off | List referenced files that aren't on disk |
+| `--unresolved` | off | List references static analysis couldn't follow |
+| `--risk <level>` | — | List files at `low`, `medium` or `high` risk |
+| `--graph <path>` | `.nervegraph/graph.json` | Which graph to read |
+
+```
+$ nerve query src/graph/types.ts
+src/graph/types.ts
+  typescript javascript · 122 loc · risk high
+  34 dependents (50 transitive) · 0 dependencies
+```
 
 ### Typical run
 
@@ -93,8 +116,19 @@ npx nervegraph view          # → http://localhost:4210
 Cursor) can read the dependency map instead of grepping the whole repo:
 
 ```bash
+nerve query snippets/product-card.liquid --json
+```
+
+`usedBy` lists what breaks if the file changes, `transitiveDependents` is the
+full blast radius, and `stale: true` means the file changed since the scan —
+run `nerve scan` first. The whole map is also readable directly:
+
+```bash
 nerve scan --quiet && cat .nervegraph/graph.json
 ```
+
+Keep it fresh while working: `nerve scan --watch` in one terminal, `nerve view`
+in another — the map reloads itself on every re-scan.
 
 ---
 
