@@ -3,7 +3,7 @@ import { scanShopifyJson } from '../scanners/shopify-json.ts';
 
 // Only templates/*.json and sections/*.json carry structural refs
 // (sections.*.type). Other JSON (config/, locales/) is a leaf node — see
-// docs/04-scanners.md §4.2 — so it's deliberately not matched here.
+// so it's deliberately not matched here.
 export const shopifyJsonLanguage: LanguageModule = {
   id: 'shopify-json',
   matches: (id, ctx) =>

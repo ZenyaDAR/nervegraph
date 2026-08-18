@@ -43,7 +43,11 @@ export function resolveRefs(fromId: string, refs: RawRef[], ctx: ResolveContext)
     }
 
     if (resolved.missing) missingTargets.add(resolved.id);
-    edges.push({ from: fromId, to: resolved.id, rel: ref.rel, line: ref.line, raw: ref.raw, ...(ref.value && ref.value !== 'dynamic' && ref.value !== 'concatenated' && ref.value !== 'external' ? { value: ref.value } : {}) });
+    edges.push({
+      from: fromId, to: resolved.id, rel: ref.rel, line: ref.line, raw: ref.raw,
+      ...(ref.value && ref.value !== 'dynamic' && ref.value !== 'concatenated' && ref.value !== 'external' ? { value: ref.value } : {}),
+      ...(ref.names ? { names: ref.names } : {}),
+    });
   }
 
   return { edges, unresolved, missingTargets };

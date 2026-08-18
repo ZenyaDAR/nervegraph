@@ -28,8 +28,10 @@ test('resolver registry is keyed by (rel, profile), not language', () => {
 test('every RelType a scanner can emit has a resolver in at least one profile', () => {
   // Guards the registry seam: a new scanner rel that nobody registered would
   // silently resolve to "external" for every reference it produces.
-  // class_usage is derived in the viewer from node class lists, not resolved.
-  const rels = REL_TYPES.filter(r => r !== 'class_usage');
+  // class_usage is derived in the viewer from node class lists, and
+  // custom_element is resolved by name in build.ts against the project-wide
+  // customElements.define() index — neither goes through a path resolver.
+  const rels = REL_TYPES.filter(r => r !== 'class_usage' && r !== 'custom_element');
   for (const rel of rels) {
     assert.ok(
       findResolver(rel, 'shopify') || findResolver(rel, 'js'),

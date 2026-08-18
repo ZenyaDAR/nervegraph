@@ -10,7 +10,9 @@ export interface ScanArgs {
   out?: string;
   ignore?: string[];
   noGitignore?: boolean;
+  noGit?: boolean;
   classes?: boolean;
+  pretty?: boolean;
   json?: boolean;
   quiet?: boolean;
   watch?: boolean;
@@ -35,6 +37,7 @@ async function scanOnce(args: ScanArgs, root: string): Promise<number> {
     profile: args.profile,
     extraIgnore: args.ignore,
     noGitignore: args.noGitignore,
+    noGit: args.noGit,
     classes: args.classes,
   });
 
@@ -46,7 +49,7 @@ async function scanOnce(args: ScanArgs, root: string): Promise<number> {
   const outDir = path.resolve(args.out ?? '.nervegraph');
   let size: number;
   try {
-    size = await writeGraphAtomic(outDir, graph);
+    size = await writeGraphAtomic(outDir, graph, args.pretty);
   } catch (e: any) {
     console.error(`error: failed to write artifacts: ${e?.message ?? e}`);
     return 1;

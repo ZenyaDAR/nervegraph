@@ -1,5 +1,6 @@
 .omc/
 docs/
+PLAN.md
 node_modules/
 dist/
 .nervegraph/

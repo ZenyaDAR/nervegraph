@@ -29,6 +29,7 @@ function graphFile(): string {
       node('src/entry.js', { out: 1, entrypoint: true, risk: 'high' }),
       node('src/gone.js', { missing: true, in: 1 }),
       node('src/dead.js', { orphan: true }),
+      node('lib/util.js', { in: 1 }), // same basename as src/util.js — makes "util.js" ambiguous
     ],
     edges: [
       { from: 'src/a.js', to: 'src/util.js', rel: 'import', line: 1, raw: "import './util.js'" },
@@ -98,6 +99,24 @@ test('list forms filter the node set', async () => {
 test('a file outside the graph is an error, not an empty card', async () => {
   const { code } = await capture(() => runQuery({ file: 'src/nope.js', graph: GRAPH, json: true }));
   assert.equal(code, 5);
+});
+
+test('a name resolves without its directory or its extension', async () => {
+  const byName = JSON.parse((await capture(() => runQuery({ file: 'dead.js', graph: GRAPH, json: true }))).out);
+  assert.equal(byName.file, 'src/dead.js');
+
+  const byStem = JSON.parse((await capture(() => runQuery({ file: 'dead', graph: GRAPH, json: true }))).out);
+  assert.equal(byStem.file, 'src/dead.js');
+});
+
+test('an ambiguous name lists the candidates instead of guessing', async () => {
+  const { code } = await capture(() => runQuery({ file: 'util.js', graph: GRAPH, json: true }));
+  assert.equal(code, 2);
+});
+
+test('an exact path wins over a suffix match', async () => {
+  const card = JSON.parse((await capture(() => runQuery({ file: 'src/util.js', graph: GRAPH, json: true }))).out);
+  assert.equal(card.file, 'src/util.js');
 });
 
 test('a missing graph tells the caller to scan', async () => {

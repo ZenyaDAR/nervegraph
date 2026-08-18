@@ -3,7 +3,7 @@ import { stripMinSuffix } from './path-utils.ts';
 
 // Shopify theme conventions: a Liquid tag name is looked up at a fixed path
 // by naming convention alone (no traversal, no extension chain) — see
-// docs/04-scanners.md §4.5. These only apply under the shopify profile;
+// These only apply under the shopify profile;
 // resolvers/generic.ts covers the profile-agnostic code-level rels (import,
 // css_import, ...) that a theme's own assets/*.js and assets/*.css still use.
 function structural(candidate: string, ctx: ResolveContext): ResolvedTarget {

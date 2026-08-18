@@ -6,6 +6,8 @@ import { VERSION } from '../version.ts';
 import { findLanguage } from '../scan/languages/index.ts';
 import { loadAliases, loadGoModule, loadPsr4 } from '../scan/aliases.ts';
 import { resolveRefs } from './resolve.ts';
+import { markDeadExports, findDuplicates } from './analysis.ts';
+import { collectChurn, hotThreshold } from '../scan/git.ts';
 import type { Graph, GraphNode, GraphEdge, UnresolvedRef, Warning, RawRef, Risk } from './types.ts';
 import { SCHEMA_VERSION } from './types.ts';
 import { readFileSync, existsSync } from 'node:fs';
@@ -16,6 +18,7 @@ export interface ScanOptions {
   extraIgnore?: string[];
   noGitignore?: boolean;
   classes?: boolean;
+  noGit?: boolean;
 }
 
 function countLoc(content: string): number {
@@ -26,10 +29,15 @@ function countLoc(content: string): number {
   return content.replace(/\n$/, '').split('\n').length;
 }
 
-function riskFor(inDeg: number, entrypoint: boolean): Risk {
+// A file everything depends on is risky; a file everything depends on *and*
+// that changes every week is riskier still. Churn only ever promotes one step,
+// and only for a file something already depends on — a hot leaf is just a file
+// under active development, not a hazard.
+function riskFor(inDeg: number, entrypoint: boolean, hot: boolean): Risk {
   if (entrypoint) return 'high';
   if (inDeg >= 10) return 'high';
-  if (inDeg >= 3) return 'medium';
+  if (inDeg >= 3) return hot ? 'high' : 'medium';
+  if (inDeg >= 1 && hot) return 'medium';
   return 'low';
 }
 
@@ -113,6 +121,11 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
     if (/^locales\/.*\.default\.json$/.test(id)) { defaultLocale = id; break; }
   }
 
+  // Custom elements are resolved by name against the whole project, not by
+  // path, so they wait for every file to have been scanned.
+  const elementDefinedIn = new Map<string, string>();
+  const elementRefs: { from: string; ref: RawRef }[] = [];
+
   for (const file of files) {
     const lang = findLanguage(file.id, { profile });
     let refs: RawRef[] = [];
@@ -125,10 +138,16 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
         refs = r.refs;
         exportsList = r.exports;
         classesList = opts.classes ? r.classes : undefined;
+        for (const tag of r.defines ?? []) {
+          if (!elementDefinedIn.has(tag)) elementDefinedIn.set(tag, file.id);
+        }
       } catch {
         warnings.push({ code: 'parse_error', file: file.id, message: `invalid ${lang.id}` });
       }
     }
+
+    for (const ref of refs) if (ref.rel === 'custom_element') elementRefs.push({ from: file.id, ref });
+    refs = refs.filter(r => r.rel !== 'custom_element');
 
     const outcome = resolveRefs(file.id, refs, { profile, fileExists, defaultLocale, aliases, psr4, goModule, listDir });
     const fileEdges = dedupeEdges(outcome.edges.map(e => ({ ...e, to: realId(e.to) })));
@@ -151,6 +170,23 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
       ...(exportsList ? { exports: exportsList } : {}),
       ...(classesList ? { classes: classesList } : {}),
     });
+  }
+
+  // Second pass: <product-form> in markup meets customElements.define() in JS.
+  // An element nothing defines is not a mistake — it may come from a vendor
+  // bundle or the platform — so it is recorded as unresolved, not as missing.
+  for (const { from, ref } of elementRefs) {
+    const target = elementDefinedIn.get(ref.target);
+    if (target && target !== from) {
+      edges.push({ from, to: target, rel: 'custom_element', line: ref.line, raw: ref.raw, value: ref.target });
+      const node = nodes.get(from);
+      if (node) node.out += 1;
+    } else if (!target) {
+      unresolved.push({
+        from, line: ref.line, rel: 'custom_element', raw: ref.raw,
+        reason: 'ambiguous', hint: 'no customElements.define() for this tag in the project',
+      });
+    }
   }
 
   for (const b of binaryLeaves) {
@@ -195,12 +231,19 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
     if (target) target.in += 1;
   }
 
+  const churn = opts.noGit ? new Map<string, number>() : collectChurn(root);
+  const hotAt = hotThreshold(churn);
+
   for (const n of nodes.values()) {
-    n.risk = riskFor(n.in, n.entrypoint);
+    const commits = churn.get(n.id);
+    if (commits !== undefined) n.churn = commits;
+    n.risk = riskFor(n.in, n.entrypoint, (commits ?? 0) >= hotAt);
     n.orphan = n.in === 0 && !n.entrypoint;
   }
 
-  detectCycles(nodes, edges, warnings);
+  markDeadExports(nodes, edges);
+  const cycles = detectCycles(nodes, edges, warnings);
+  const duplicates = findDuplicates(nodes.values());
 
   const sortedNodes = [...nodes.values()].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const sortedEdges = [...edges].sort((a, b) =>
@@ -231,6 +274,8 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
     edges: sortedEdges,
     unresolved: sortedUnresolved,
     warnings,
+    cycles,
+    duplicates,
   };
 
   return graph;
@@ -256,10 +301,13 @@ function dedupeEdges(list: GraphEdge[]): GraphEdge[] {
  * Report dependency cycles, naming the files involved — "dependency cycle
  * detected" with no location left the user grepping by hand.
  *
+ * Returns them as data (`[a, b, c, a]`); the prose warning is still emitted so
+ * a schema-3 consumer that only knows `warnings` keeps working.
+ *
  * Iterative rather than recursive: a deep import chain (a 10k-file monorepo
  * barrel) overflowed the call stack, which crashed the whole scan.
  */
-function detectCycles(nodes: Map<string, GraphNode>, edges: GraphEdge[], warnings: Warning[]) {
+function detectCycles(nodes: Map<string, GraphNode>, edges: GraphEdge[], warnings: Warning[]): string[][] {
   const adj = new Map<string, string[]>();
   for (const e of edges) {
     if (!adj.has(e.from)) adj.set(e.from, []);
@@ -305,6 +353,7 @@ function detectCycles(nodes: Map<string, GraphNode>, edges: GraphEdge[], warning
   for (const cycle of cycles) {
     warnings.push({ code: 'cycle', file: cycle[0], message: `dependency cycle: ${cycle.join(' -> ')}` });
   }
+  return cycles;
 }
 
 // A tangled project can contain thousands of cycles; past a handful the list

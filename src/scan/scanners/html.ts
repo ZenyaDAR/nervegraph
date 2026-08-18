@@ -1,5 +1,5 @@
 import type { RawRef, ScannerResult } from '../../graph/types.ts';
-import { lineAt, truncate, blank, isExternalUrl } from './util.ts';
+import { lineAt, truncate, blank, isExternalUrl, customElementRefs } from './util.ts';
 
 // Regex over tags, not a full HTML parser — same trade-off as the Liquid
 // scanner (see README "Key decisions"). Reference attributes are trivially
@@ -64,6 +64,8 @@ export function scanHtml(file: { id: string; content: string }): ScannerResult {
       if (c && !/[{}%$<]/.test(c)) classes.add(c);
     }
   }
+
+  refs.push(...customElementRefs(content));
 
   return { refs, classes: Array.from(classes) };
 }

@@ -29,7 +29,7 @@ file; if you change a color, change it here first, re-validate, then apply.
   visually distinct from the 8 category hues so a risk badge never reads as
   "series 9." Always paired with the text label (`RISK HIGH`, not color alone).
 - **Relation-line colors are deliberately outside the categorical system.**
-  Edges recede on purpose (see docs/05-viewer.md §5.2 — "more muted than nodes")
+  Edges recede on purpose — they are more muted than nodes —
   and are already differentiated by line style (solid vs dashed) as well as
   color, so they don't need to clear the same CVD bar as node identity. They're
   muted slate variants, listed below for completeness but not run through the
@@ -109,11 +109,15 @@ color chip.
 
 | Group | Rel types | Dark | Light | Style |
 |---|---|---|---|---|
-| structural | `render`, `include`, `section`, `section_group`, `template_section`, `content_for`, `rust_mod`, `tf_module` | `#4a5568` | `#9096a6` | solid |
+| structural | `render`, `include`, `section`, `section_group`, `template_section`, `content_for`, `rust_mod`, `tf_module`, `custom_element` | `#4a5568` | `#9096a6` | solid |
 | code | `import`, `require`, `dynamic_import`, `css_import`, `py_import`, `rb_require`, `rb_require_relative`, `go_import`, `php_require`, `php_use`, `java_import`, `c_include`, `sh_source` | `#5a6478` | `#9aa3b8` | dashed |
 | resource | `asset`, `asset_url`, `script_src`, `link_href`, `md_link` | `#3f4a5a` | `#7c8794` | solid |
 | class usage | `class_usage` | `#4a4458` | `#9b8fae` | thin dashed |
 | translation | `translation` | `#3f4a5a` | `#7c8794` | solid, hidden by default |
+
+`custom_element` is **structural** too: `<product-form>` in markup and
+`customElements.define('product-form', …)` in JS are two halves of one
+component, the same relationship a `render` expresses in Liquid.
 
 `tf_module` joins `rust_mod` as **structural** for the same reason: a module
 block is what pulls a directory into the configuration. `md_link` is grouped as

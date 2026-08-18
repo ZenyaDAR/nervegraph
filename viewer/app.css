@@ -73,7 +73,7 @@ button { font: inherit; }
 
 /* Type identity is never color-only: this swatch always sits beside the
    type's name (filter list, detail panel) so color is a reinforcement, not
-   the sole encoding. See docs/05-viewer.md §5.9 / COLOR_SCHEME.md. */
+   the sole encoding. See COLOR_SCHEME.md. */
 .type-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
 
 #canvas-wrap { flex: 1; position: relative; min-width: 0; background: var(--canvas-bg); }

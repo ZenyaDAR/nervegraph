@@ -10,7 +10,7 @@ export interface LanguageContext {
  * RawRef[]: which files it claims, and how to read them. It knows nothing
  * about the filesystem beyond the file it's given — resolving a RawRef's
  * target to a node id is a separate concern, registered per rel type in
- * graph/resolvers/ (see docs/EXTENDING.md for the full recipe).
+ * graph/resolvers/ (see EXTENDING.md for the full recipe).
  */
 export interface LanguageModule {
   id: string;

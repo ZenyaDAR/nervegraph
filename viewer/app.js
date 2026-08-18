@@ -38,6 +38,7 @@
       asset: '#3f4a5a', asset_url: '#3f4a5a', script_src: '#3f4a5a', link_href: '#3f4a5a',
       md_link: '#3f4a5a',
       class_usage: '#4a4458',
+      custom_element: '#4a5568',
       translation: '#3f4a5a',
     },
     light: {
@@ -51,6 +52,7 @@
       asset: '#7c8794', asset_url: '#7c8794', script_src: '#7c8794', link_href: '#7c8794',
       md_link: '#7c8794',
       class_usage: '#9b8fae',
+      custom_element: '#9096a6',
       translation: '#7c8794',
     },
   };
@@ -77,7 +79,7 @@
   ]);
   // Mirrors app.css's `@media (prefers-color-scheme: light)` block exactly:
   // light only when explicitly matched, dark otherwise (the project default,
-  // including the "no preference reported" case — see docs/05-viewer.md §5.8).
+  // including the "no preference reported" case).
   const lightModeQuery = window.matchMedia?.('(prefers-color-scheme: light)');
 
   function mode() {
@@ -132,6 +134,11 @@
     path: null,
     pathTarget: null,
     cycles: { nodes: new Set(), edges: new Set(), list: [] },
+    // 0 = show every file; n = collapse each folder at path depth n into one
+    // node, except the ones the user has expanded.
+    groupBy: 0,
+    expanded: new Set(),
+    clustersById: new Map(),
   };
 
   const storageKey = () => `nervegraph:${state.graph ? state.graph.root : ''}`;
@@ -153,6 +160,7 @@
         theme: state.theme,
         colorBy: state.colorBy,
         sizeBy: state.sizeBy,
+        groupBy: state.groupBy,
       }));
     } catch { /* ignore */ }
   }
@@ -185,7 +193,9 @@
     state.theme = persisted?.theme ?? 'auto';
     state.colorBy = persisted?.colorBy ?? 'type';
     state.sizeBy = persisted?.sizeBy ?? 'in';
-    state.cycles = parseCycles(graph.warnings ?? []);
+    // Big graphs open folded: 3000 dots say less than 30 folders do.
+    state.groupBy = persisted?.groupBy ?? (graph.nodes.length > 1200 ? 1 : 0);
+    state.cycles = indexCycles(graph);
 
     document.getElementById('root-name').textContent = graph.root.split(/[\\/]/).pop();
     document.getElementById('counts').textContent = `${graph.nodes.length} nodes · ${graph.edges.length} edges`;
@@ -199,6 +209,7 @@
     applyTheme();
     updateStatusBar();
     wireTopLevelUI();
+    applyHash();
 
     subscribeToGraphChanges();
 
@@ -292,6 +303,20 @@
       refreshHighlight();
     });
 
+    const groupBy = document.getElementById('group-by');
+    groupBy.value = String(state.groupBy);
+    groupBy.addEventListener('change', () => {
+      state.groupBy = Number(groupBy.value);
+      state.expanded.clear();
+      savePersisted();
+      applyFilters();
+    });
+
+    document.getElementById('collapse-all').addEventListener('click', () => {
+      state.expanded.clear();
+      applyFilters();
+    });
+
     for (const [id, key, cast] of [['focus-depth', 'focusDepth', Number], ['focus-dir', 'focusDir', String]]) {
       const el = document.getElementById(id);
       el.value = String(state[key]);
@@ -367,14 +392,12 @@
 
   // ── Cycles ───────────────────────────────────────────────────────────────
 
-  // build.ts already found the cycles and wrote them into warnings as
-  // "dependency cycle: a -> b -> a"; the viewer only has to read them back so
-  // the edges involved can be drawn in the critical color.
-  function parseCycles(warnings) {
+  // graph.cycles (schema 4+) is the list of closed walks build.ts found. It
+  // used to reach the viewer only as the prose of a `cycle` warning, which had
+  // to be regex-parsed back into a path — a format nobody could safely reword.
+  function indexCycles(graph) {
     const nodes = new Set(), edges = new Set(), list = [];
-    for (const w of warnings) {
-      if (w.code !== 'cycle') continue;
-      const files = String(w.message).replace(/^dependency cycle:\s*/, '').split(' -> ');
+    for (const files of graph.cycles ?? []) {
       if (files.length < 2) continue;
       list.push(files);
       for (const f of files) nodes.add(f);
@@ -452,6 +475,66 @@
     return null;
   }
 
+  // ── Folder clustering ────────────────────────────────────────────────────
+
+  // Past a couple of thousand nodes the map stops being readable, which is
+  // exactly the size where it would help most. Collapsing a folder into one
+  // node trades detail for shape; clicking the folder expands it again, so the
+  // detail is one click away rather than gone.
+  function clusterKeyFor(id) {
+    if (!state.groupBy) return null;
+    const parts = id.split('/');
+    if (parts.length <= 1) return null; // a root-level file is its own folder
+    const key = parts.slice(0, Math.min(state.groupBy, parts.length - 1)).join('/');
+    return state.expanded.has(key) ? null : key;
+  }
+
+  function foldByFolder(nodes, links) {
+    const clusters = new Map();
+    const mapId = new Map();
+
+    for (const n of nodes) {
+      const key = clusterKeyFor(n.id);
+      if (!key) { mapId.set(n.id, n.id); continue; }
+      const cid = `${key}/`;
+      mapId.set(n.id, cid);
+      let c = clusters.get(cid);
+      if (!c) {
+        c = {
+          id: cid, cluster: true, files: [], type: 'unknown', lang: 'folder',
+          risk: 'low', in: 0, out: 0, loc: 0, size: 0, orphan: false, entrypoint: false,
+        };
+        clusters.set(cid, c);
+      }
+      c.files.push(n.id);
+      c.loc += n.loc;
+      c.size += n.size;
+    }
+
+    const byPair = new Map();
+    for (const l of links) {
+      const from = mapId.get(l.from), to = mapId.get(l.to);
+      if (!from || !to || from === to) continue; // a folder's inner edges are its own business
+      const key = `${from}\0${to}\0${l.rel}`;
+      const seen = byPair.get(key);
+      if (seen) seen._count += l._count;
+      else byPair.set(key, { ...l, from, to, source: from, target: to });
+    }
+
+    for (const c of clusters.values()) { c.in = 0; c.out = 0; }
+    for (const l of byPair.values()) {
+      const from = clusters.get(l.from), to = clusters.get(l.to);
+      if (from) from.out += 1;
+      if (to) to.in += 1;
+    }
+
+    state.clustersById = clusters;
+    return {
+      nodes: [...nodes.filter(n => mapId.get(n.id) === n.id), ...clusters.values()],
+      links: [...byPair.values()],
+    };
+  }
+
   function buildGraphData() {
     const ids = visibleNodeIds();
     const nodes = state.graph.nodes.filter(n => ids.has(n.id)).map(n => ({ ...n }));
@@ -466,7 +549,8 @@
       if (seen) seen._count++;
       else byPair.set(key, { ...e, source: e.from, target: e.to, _count: 1 });
     }
-    return { nodes, links: [...byPair.values()] };
+    const links = [...byPair.values()];
+    return state.groupBy ? foldByFolder(nodes, links) : { nodes, links };
   }
 
   function setGraphData(data) {
@@ -475,6 +559,8 @@
   }
 
   function nodeRadius(n) {
+    // A folder's size is how much it contains, whatever "size by" says about files.
+    if (n.cluster) return 6 + Math.min(14, Math.sqrt(n.files.length) * 2.5);
     // loc runs into the thousands where degrees run into the tens, so the two
     // scales need different factors to land in the same 4–16px range.
     const value = state.sizeBy === 'loc' ? n.loc : state.sizeBy === 'out' ? n.out : n.in;
@@ -574,6 +660,12 @@
   }
 
   function handleNodeClick(node, event) {
+    // A folder is a lid, not a file: clicking it lifts the lid.
+    if (node.cluster) {
+      state.expanded.add(node.id.replace(/\/$/, ''));
+      setGraphData(buildGraphData());
+      return;
+    }
     // Shift-click asks "how does the selected file reach this one".
     if (event?.shiftKey && state.selected && state.selected !== node.id) {
       state.path = shortestPath(state.selected, node.id);
@@ -588,10 +680,18 @@
   }
 
   function selectNode(id) {
+    // Searching for, or linking to, a file inside a collapsed folder has to
+    // open that folder — otherwise the selection points at nothing on screen.
+    const hiddenIn = clusterKeyFor(id);
+    if (hiddenIn) {
+      state.expanded.add(hiddenIn);
+      setGraphData(buildGraphData());
+    }
     state.selected = id;
     refreshHighlight();
     renderDetails(id);
     updateStatusBar();
+    syncHash();
   }
 
   function clearSelection() {
@@ -601,6 +701,28 @@
     closeDetails();
     refreshHighlight();
     updateStatusBar();
+    syncHash();
+  }
+
+  // The selection and the focused subgraph live in the URL, so a view can be
+  // bookmarked or pasted to a colleague. Everything else (filters, colors) is
+  // per-person taste and stays in localStorage.
+  function syncHash() {
+    const parts = [];
+    if (state.selected) parts.push(`file=${encodeURIComponent(state.selected)}`);
+    if (state.focusId) parts.push(`focus=${encodeURIComponent(state.focusId)}`);
+    history.replaceState(null, '', parts.length ? `#${parts.join('&')}` : location.pathname);
+  }
+
+  function applyHash() {
+    const params = new URLSearchParams(location.hash.slice(1));
+    const focus = params.get('focus');
+    if (focus && state.nodesById.has(focus)) {
+      state.focusId = focus;
+      setGraphData(buildGraphData());
+    }
+    const file = params.get('file');
+    if (file && state.nodesById.has(file)) selectNode(file);
   }
 
   // Node/link colors are computed fresh from `state` on every canvas frame
@@ -623,7 +745,7 @@
 
   // --- Canvas node rendering: circle + entrypoint ring + missing dash +
   // an always-legible basename label (see COLOR_SCHEME.md "Node label pill").
-  // Density rules match docs/05-viewer.md §5.7's performance table.
+  // Labels thin out as the visible node count grows; see shouldLabel below.
   function drawNode(node, ctx, globalScale) {
     const r = nodeRadius(node);
     const active = state.selected ?? state.hovered;
@@ -634,6 +756,15 @@
     const dimmed = state.path ? !state.path.ids.has(node.id) : (active && !isNeighbor);
     const baseColor = node.missing ? STATUS_CRITICAL : colorForNode(node);
     const color = dimmed ? dim(baseColor) : baseColor;
+
+    // A folder is drawn as a square so it never reads as "one big file".
+    if (node.cluster) {
+      roundRectPath(ctx, node.x - r, node.y - r, r * 2, r * 2, r / 3);
+      ctx.fillStyle = color;
+      ctx.fill();
+      drawLabel(node, ctx, globalScale, r);
+      return;
+    }
 
     ctx.beginPath();
     ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false);
@@ -669,7 +800,7 @@
   }
 
   function drawLabel(node, ctx, globalScale, r) {
-    const label = basename(node.id);
+    const label = node.cluster ? `${basename(node.id.replace(/\/$/, ''))}/ ${node.files.length}` : basename(node.id);
     const fontSize = Math.max(11 / globalScale, 1.6);
     ctx.font = `${fontSize}px -apple-system, Segoe UI, sans-serif`;
     const textWidth = ctx.measureText(label).width;
@@ -730,8 +861,16 @@
     const swatch = document.createElement('span');
     swatch.className = 'type-swatch';
     swatch.style.background = colorForNode(n);
-    typeLine.append(swatch, ` ${n.lang} ${n.type} · ${n.loc} loc · ${(n.size / 1024).toFixed(1)} KB`);
+    const churnLabel = n.churn !== undefined ? ` · ${n.churn} commits` : '';
+    typeLine.append(swatch, ` ${n.lang} ${n.type} · ${n.loc} loc · ${(n.size / 1024).toFixed(1)} KB${churnLabel}`);
     body.appendChild(typeLine);
+
+    if (n.deadExports?.length) {
+      const dead = document.createElement('div');
+      dead.className = 'risk-box medium';
+      dead.textContent = `unused exports: ${n.deadExports.join(', ')}`;
+      body.appendChild(dead);
+    }
 
     if (state.cycles.nodes.has(n.id)) {
       const warn = document.createElement('div');
@@ -770,14 +909,44 @@
       state.focusId = state.focusId === id ? null : id;
       setGraphData(buildGraphData());
       renderDetails(id);
+      syncHash();
     });
     const copyBtn = document.createElement('button');
     copyBtn.textContent = 'copy path';
     copyBtn.addEventListener('click', () => navigator.clipboard?.writeText(n.id));
-    actions.append(focusBtn, copyBtn);
+    // The panel already holds exactly what an agent needs before an edit; this
+    // hands it over in one click instead of a screenshot or five greps.
+    const contextBtn = document.createElement('button');
+    contextBtn.textContent = 'copy as context';
+    contextBtn.addEventListener('click', () => {
+      navigator.clipboard?.writeText(contextMarkdown(n, usedBy, uses));
+      contextBtn.textContent = 'copied ✓';
+      setTimeout(() => { contextBtn.textContent = 'copy as context'; }, 1200);
+    });
+    actions.append(focusBtn, copyBtn, contextBtn);
     body.appendChild(actions);
 
     document.getElementById('details').classList.remove('closed');
+  }
+
+  function contextMarkdown(n, usedBy, uses) {
+    const lines = [
+      `## ${n.id}`,
+      `- ${n.lang} ${n.type}, ${n.loc} loc, risk ${n.risk}${n.entrypoint ? ', entrypoint' : ''}${n.orphan ? ', orphan' : ''}`,
+      `- ${n.in} dependents, ${n.out} dependencies`,
+    ];
+    if (n.churn !== undefined) lines.push(`- changed in ${n.churn} of the last commits`);
+    if (n.deadExports?.length) lines.push(`- exports nothing imports: ${n.deadExports.join(', ')}`);
+    if (state.cycles.nodes.has(n.id)) lines.push('- part of a dependency cycle');
+    const refs = (title, list, pick) => {
+      if (!list.length) return;
+      lines.push('', `### ${title}`);
+      for (const e of list.slice(0, 20)) lines.push(`- ${pick(e)}:${e.line} — ${e.rel} — \`${e.raw}\``);
+      if (list.length > 20) lines.push(`- … ${list.length - 20} more`);
+    };
+    refs('Used by', usedBy, e => e.from);
+    refs('Uses', uses, e => e.to);
+    return lines.join('\n') + '\n';
   }
 
   function appendRefList(body, title, list, otherIdFn) {
@@ -845,7 +1014,9 @@
     right.textContent = `scanned ${timeAgo(scanned)}`;
 
     const issuesBtn = document.getElementById('issues-btn');
-    issuesBtn.textContent = `⚠ ${unresolved + state.cycles.list.length} issues`;
+    const deadFiles = state.graph.nodes.filter(n => n.deadExports?.length).length;
+    const dupes = (state.graph.duplicates ?? []).length;
+    issuesBtn.textContent = `⚠ ${unresolved + state.cycles.list.length + deadFiles + dupes} issues`;
 
     if (state.selected) {
       const n = state.nodesById.get(state.selected);
@@ -896,6 +1067,40 @@
       });
     }
 
+    const duplicates = state.graph.duplicates ?? [];
+    if (duplicates.length) {
+      body.appendChild(heading('issues-duplicates', `Duplicate files (${duplicates.length})`));
+      for (const group of duplicates.slice(0, ISSUE_LIMIT)) {
+        const row = document.createElement('div');
+        row.className = 'issue';
+        const head = document.createElement('div');
+        head.textContent = group.map(f => f.split('/').pop()).join(' = ');
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = group.join('  ·  ');
+        row.append(head, meta);
+        row.addEventListener('click', () => selectNode(group[0]));
+        body.appendChild(row);
+      }
+    }
+
+    const dead = state.graph.nodes.filter(n => n.deadExports?.length);
+    if (dead.length) {
+      body.appendChild(heading('issues-dead', `Unused exports (${dead.length} files)`));
+      for (const n of dead.slice(0, ISSUE_LIMIT)) {
+        const row = document.createElement('div');
+        row.className = 'issue';
+        const head = document.createElement('div');
+        head.textContent = n.id;
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = n.deadExports.join(', ');
+        row.append(head, meta);
+        row.addEventListener('click', () => selectNode(n.id));
+        body.appendChild(row);
+      }
+    }
+
     const unresolved = state.graph.unresolved ?? [];
     if (unresolved.length) {
       const byReason = {};
@@ -944,7 +1149,7 @@
     if (!body.childElementCount) {
       const ok = document.createElement('div');
       ok.className = 'empty';
-      ok.textContent = 'Nothing unresolved, no cycles, no warnings.';
+      ok.textContent = 'Nothing unresolved, no cycles, no duplicates, no unused exports.';
       body.appendChild(ok);
     }
   }

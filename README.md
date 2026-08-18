@@ -50,6 +50,10 @@ Requires **Node ≥ 22.6**.
 nerve scan  [path] [flags]    # writes .nervegraph/graph.json
 nerve view         [flags]    # serves the interactive map
 nerve query <file> [flags]    # what uses this file, and what it uses
+nerve check        [flags]    # fail the build when the graph breaks a budget
+nerve diff <a> [b] [flags]    # what changed structurally between two graphs
+nerve export       [flags]    # the graph as mermaid or dot text
+nerve mcp          [flags]    # serve the graph to an agent over MCP (stdio)
 ```
 
 ### `nerve scan`
@@ -62,6 +66,7 @@ nerve query <file> [flags]    # what uses this file, and what it uses
 | `--ignore <glob>` | — | Extra ignore pattern; repeatable |
 | `--no-gitignore` | off | Don't read `.gitignore` |
 | `--classes` | off | Also collect CSS/HTML class names (noisy) |
+| `--pretty` | off | Indent `graph.json` — bigger, but diffable by hand |
 | `--json` | off | Machine-readable summary on stdout |
 | `--quiet` | off | Suppress the report |
 
@@ -93,6 +98,10 @@ between two files, and the focus controls.
 | `--missing` | off | List referenced files that aren't on disk |
 | `--unresolved` | off | List references static analysis couldn't follow |
 | `--risk <level>` | — | List files at `low`, `medium` or `high` risk |
+| `--dead-exports` | off | List exports nothing imports |
+| `--duplicates` | off | List groups of byte-identical files |
+| `--cycles` | off | List dependency cycles |
+| `--packages` | off | Fold the graph up to one node per package (monorepos) |
 | `--graph <path>` | `.nervegraph/graph.json` | Which graph to read |
 
 ```
@@ -101,6 +110,48 @@ src/graph/types.ts
   typescript javascript · 122 loc · risk high
   34 dependents (50 transitive) · 0 dependencies
 ```
+
+### `nerve check`
+
+The same artifact as a gate. Nothing fails unless you ask for it, except a
+reference to a file that isn't on disk:
+
+```bash
+nerve scan --quiet && nerve check --max-cycles 0 --no-duplicates
+# exit code 7 when a budget is broken, 0 when every budget is met
+```
+
+| Flag | What it means |
+|---|---|
+| `--max-cycles <n>` | At most n dependency cycles |
+| `--max-unresolved <n>` | At most n references static analysis couldn't follow |
+| `--max-orphans <n>` | At most n files nothing references |
+| `--allow-missing` | Tolerate references to files that aren't on disk |
+| `--no-dead-exports` | Fail if any export is unused |
+| `--no-duplicates` | Fail if any two files are byte-identical |
+| `--rules <file>` | Layer rules; `.nervegraph/rules.json` is picked up automatically |
+
+Layer rules are yours to write — the tool only checks what you declared:
+
+```json
+[
+  { "name": "ui must not reach the database", "from": "src/ui/**", "deny": "src/db/**" },
+  { "from": "src/core/**", "allow": "src/core/**" }
+]
+```
+
+### `nerve diff` and `nerve export`
+
+```bash
+nerve diff old-graph.json                  # against .nervegraph/graph.json
+nerve export --format mermaid --focus src/graph/build.ts --depth 1
+nerve export --format dot --out graph.dot
+```
+
+`diff` names new and removed files and edges, cycles introduced or resolved,
+files that became orphans, and files whose risk went up — the structural half
+of a code review. `export` writes the map as text, so a diagram can live in a
+README or an ADR and be diffed like code.
 
 ### Typical run
 
@@ -130,6 +181,17 @@ nerve scan --quiet && cat .nervegraph/graph.json
 Keep it fresh while working: `nerve scan --watch` in one terminal, `nerve view`
 in another — the map reloads itself on every re-scan.
 
+Agents that speak MCP can skip the shell entirely:
+
+```json
+{ "mcpServers": { "nervegraph": { "command": "npx", "args": ["nervegraph", "mcp"] } } }
+```
+
+It exposes two tools — `nervegraph_query` (one file's dependents, dependencies,
+risk and blast radius) and `nervegraph_list` (orphans, missing files, high-risk
+files, unused exports, duplicates, cycles). The graph is re-read on every call,
+so `nerve scan --watch` keeps the agent current.
+
 ---
 
 ## Languages
@@ -152,6 +214,20 @@ in another — the map reloads itself on every re-scan.
 | Shell | `.sh` `.bash` `.zsh` | `source x.sh` / `. x.sh` |
 | Terraform | `.tf` `.tfvars` | `module { source = "./…" }` |
 | Shopify JSON | `templates/*.json`, `sections/*.json` | `sections.*.type` |
+| Web components | any markup + JS | `<product-form>` ↔ `customElements.define('product-form', …)` |
+
+### Maturity
+
+Breadth without measured accuracy is how a dependency graph quietly starts
+lying, so each language carries a label rather than an implied promise:
+
+| Level | Languages | What it means |
+|---|---|---|
+| verified | Liquid, JavaScript / TypeScript, HTML, CSS, Shopify JSON | Exercised against real projects; scanner and resolver both covered by tests |
+| experimental | Python, Ruby, Rust, Go, PHP, Java / Kotlin, C / C++, Vue / Svelte / Astro, Markdown, Shell, Terraform | Covered by unit tests on fixtures, not yet measured on a large real codebase — expect gaps rather than wrong edges |
+
+A language moves to *verified* when its `unresolved` share has been measured on
+a real repository, not before.
 
 Third-party references stay out of the graph: `import requests`, `require
 'json'` and a CDN `<script src>` are reported as **external**, not as broken
@@ -213,4 +289,3 @@ can read the map instead of grepping the whole repo.
 | Frontend framework | None. Vanilla JS + one HTML file | The detail panel is 150 lines of DOM |
 | Storage | A single `graph.json` | SQLite at 100k+ nodes, not before |
 
-Rationale for each — in `docs/06-architecture.md` (internal spec, not tracked in this repo).

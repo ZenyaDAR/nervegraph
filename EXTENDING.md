@@ -140,9 +140,9 @@ If your language introduces a relation Liquid/JS/CSS don't already have:
 
 1. Add the string to the `REL_TYPES` array in `src/graph/types.ts`. The
    `RelType` union is derived from that array, so the runtime list and the type
-   can't drift; this is the one central, intentionally-narrow contract (see
-   docs/03-graph-schema.md §3.9). Consumers are required to ignore unknown
-   `rel` values rather than fail on them.
+   can't drift; this is the one central, intentionally-narrow contract, and
+   `schemaVersion` covers it. Consumers are required to ignore unknown `rel`
+   values rather than fail on them.
 2. Register a resolver for it in `src/graph/resolvers/`:
    - Path-shaped and profile-agnostic (`import`, `css_import`, `asset`): add it
      to `genericResolvers` in `resolvers/generic.ts`.

@@ -5,7 +5,11 @@
 // `markdown`), new rel types for those languages, and the new `poly` profile
 // value. A schema-2 consumer that ignores unknown enum values (as 3.9 requires)
 // reads a schema-3 graph unchanged.
-export const SCHEMA_VERSION = 3;
+// 4: additive only — `cycles` (dependency cycles as data, previously only
+// readable by regex-parsing a warning's prose; the warnings still ship
+// unchanged), `duplicates` (byte-identical file groups), edge `names` (which
+// bindings an import pulls in) and node `deadExports`.
+export const SCHEMA_VERSION = 4;
 
 // Declared as runtime arrays, with the TypeScript unions derived from them, so
 // that consumers (the viewer's color tables, the resolver registry) can be
@@ -35,6 +39,8 @@ export const REL_TYPES = [
   'py_import', 'rb_require', 'rb_require_relative', 'rust_mod',
   'go_import', 'php_require', 'php_use', 'java_import', 'c_include',
   'md_link', 'sh_source', 'tf_module',
+  // markup <-> customElements.define()
+  'custom_element',
 ] as const;
 
 export type NodeType = typeof NODE_TYPES[number];
@@ -54,9 +60,17 @@ export interface GraphNode {
   risk: Risk;
   orphan: boolean;
   entrypoint: boolean;
+  /** Commits touching this file in the last 500, when the root is a git repo. */
+  churn?: number;
   exports?: string[];
   classes?: string[];
   missing?: boolean;
+  /**
+   * Exports no importer names. Present only when every incoming reference
+   * declares what it imports — one `import *`, `require()` or `<script src>`
+   * makes usage unknowable and the field is omitted rather than guessed.
+   */
+  deadExports?: string[];
 }
 
 export interface GraphEdge {
@@ -66,6 +80,8 @@ export interface GraphEdge {
   line: number;
   raw: string;
   value?: string;
+  /** Bindings this reference pulls in. `['*']` = all / unknowable. */
+  names?: string[];
 }
 
 export interface UnresolvedRef {
@@ -101,9 +117,13 @@ export interface Graph {
   edges: GraphEdge[];
   unresolved: UnresolvedRef[];
   warnings: Warning[];
+  /** Each entry is a closed walk: `[a, b, c, a]`. Capped, see build.ts. */
+  cycles: string[][];
+  /** Groups of files with byte-identical content. */
+  duplicates: string[][];
 }
 
-// Scanner-facing types (see docs/04-scanners.md)
+// Scanner-facing types: what a scanner returns for one file.
 export interface RawRef {
   rel: RelType;
   target: string;
@@ -111,12 +131,16 @@ export interface RawRef {
   raw: string;
   literal: boolean;
   value?: string;
+  /** Bindings this reference pulls in. `['*']` = all / unknowable. */
+  names?: string[];
 }
 
 export interface ScannerResult {
   refs: RawRef[];
   exports?: string[];
   classes?: string[];
+  /** Custom element tag names this file registers via customElements.define. */
+  defines?: string[];
 }
 
 export type Scanner = (file: { id: string; content: string }) => ScannerResult;

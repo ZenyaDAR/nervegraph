@@ -2,6 +2,61 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioning per [SemVer](https://semver.org/).
 
+## [0.4.0] — 2026-08-18
+
+`graph.json` moves to **schema 4** — additive only: new fields and one new
+relation type. A consumer that ignores unknown enum values reads it unchanged.
+
+### Added
+- **`nerve check`** — the graph as a CI gate. Budgets are opt-in
+  (`--max-cycles`, `--max-unresolved`, `--max-orphans`, `--no-dead-exports`,
+  `--no-duplicates`); a reference to a file that isn't on disk fails by default.
+  Exit code 7 when a budget is broken.
+- **Layer rules** — `.nervegraph/rules.json` (or `--rules`) declares which
+  directories may not reach which, and `check` reports the edges that break it.
+  The judgement is the user's; the tool only checks it.
+- **Unused exports** — an export no importer names is reported per file
+  (`deadExports`, `nerve query --dead-exports`, and the issues panel). Silent
+  rather than wrong: one `import *`, `require()` or `<script src>` makes usage
+  unknowable and the file is skipped.
+- **Duplicate files** — byte-identical files grouped by the hash that was
+  already on every node (`duplicates`, `nerve query --duplicates`).
+- **Git churn** — commits per file over the last 500, when the root is a repo.
+  It feeds the risk model: a file with dependents *and* constant change is
+  promoted one level. `--no-git` skips it.
+- **`nerve diff <a> [b]`** — files and edges added or removed, cycles
+  introduced or resolved, new orphans, risk increases.
+- **`nerve export --format mermaid|dot`** — the map as text, with `--focus`
+  and `--depth` to keep it renderable.
+- **`nerve mcp`** — the query surface over MCP on stdio, so an agent discovers
+  the tool instead of having to be told about it.
+- **`nerve query --packages`** — the same graph folded to one node per package,
+  which is the only readable scale for a monorepo.
+- **Web components** — `<product-form>` in markup now links to the file that
+  calls `customElements.define('product-form', …)` (new `custom_element` rel).
+- **Liquid `assign` indirection** — `{% assign card = 'product-card' %}` …
+  `{% render card %}` resolves when the name is assigned exactly one literal.
+- **Folder clustering in the viewer** — collapse each folder into one node
+  (click to expand); on by default past 1200 nodes.
+- **The selection lives in the URL**, so a view can be bookmarked or shared,
+  and a **copy as context** button hands the file's card to an agent as markdown.
+- `cycles` and `duplicates` are fields in `graph.json`; the viewer no longer
+  regex-parses cycle warnings to recover the path.
+- `--pretty` for an indented `graph.json`.
+
+### Changed
+- **`graph.json` is compact by default.** The indentation was megabytes of
+  nothing on a large repo; `--pretty` brings it back.
+
+### Removed
+- **`--force`**, which was parsed and silently ignored — the incremental cache
+  it belonged to was never built, and a full scan of 1500 files takes ~1.7 s.
+
+### Fixed
+- `nerve query <name>` resolves the way it was always documented: exact path,
+  then path suffix, then basename with or without extension, listing candidates
+  when a tier is ambiguous.
+
 ## [0.3.1] — 2026-08-16
 
 ### Fixed
@@ -63,7 +118,7 @@ values, as the schema requires, reads it unchanged.
   jumping to the alphabetically first hit.
 - **Theme button** (light / dark / follow system) and a **`?` card** with the
   keyboard shortcuts and how to read the graph.
-- **`nerve query <file>`** — the agent-facing card from docs/07: what uses this
+- **`nerve query <file>`** — the agent-facing card: what uses this
   file, what it uses, its risk, its transitive dependent count, and whether the
   file changed since the scan. `--json` prints nothing else, so it is
   pipe-safe. List forms: `--orphans`, `--missing`, `--unresolved`,

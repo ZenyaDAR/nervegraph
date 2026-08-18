@@ -1,4 +1,5 @@
 import type { RawRef, ScannerResult } from '../../graph/types.ts';
+import { customElementRefs } from './util.ts';
 
 // Replace {% comment %}...{% endcomment %} and {% raw %}...{% endraw %} bodies
 // with an equal number of newlines so line numbers stay correct, but the
@@ -28,9 +29,38 @@ function truncateRaw(s: string): string {
 
 const QUOTED = `'([^']*)'|"([^"]*)"`;
 
+/**
+ * `{% assign card = 'product-card' %}` … `{% render card %}` — the indirection
+ * costs nothing to follow when the value is a plain literal assigned exactly
+ * once in the file. A name assigned twice, or from an expression, stays
+ * unresolved: guessing which branch won is how false edges get made.
+ */
+function literalAssignments(content: string): Map<string, string> {
+  const found = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  const re = /\{%-?\s*assign\s+([A-Za-z_][\w-]*)\s*=\s*(?:'([^']*)'|"([^"]*)")\s*-?%\}/g;
+  const expression = /\{%-?\s*assign\s+([A-Za-z_][\w-]*)\s*=\s*([^%]+?)-?%\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content))) {
+    const name = m[1], value = m[2] ?? m[3];
+    if (found.has(name) && found.get(name) !== value) ambiguous.add(name);
+    else found.set(name, value);
+  }
+  // An assignment from anything other than a bare literal (a filter chain, a
+  // variable, an object) makes the name unsafe even if it is also assigned a
+  // literal elsewhere.
+  while ((m = expression.exec(content))) {
+    const rhs = m[2].trim();
+    if (!/^(?:'[^']*'|"[^"]*")$/.test(rhs)) ambiguous.add(m[1]);
+  }
+  for (const name of ambiguous) found.delete(name);
+  return found;
+}
+
 export function scanLiquid(file: { id: string; content: string }): ScannerResult {
   const refs: RawRef[] = [];
   const content = stripCommentsAndRaw(file.content);
+  const assigned = literalAssignments(content);
 
   function pushTagRefs(tagRe: RegExp, rel: RawRef['rel'], argPattern: RegExp) {
     let m: RegExpExecArray | null;
@@ -50,8 +80,16 @@ export function scanLiquid(file: { id: string; content: string }): ScannerResult
       refs.push({ rel, target: quoted, line, raw: truncateRaw(full), literal: true });
       return;
     }
-    // not a plain literal: dynamic or concatenated
+    // A bare variable whose literal value the file itself set earlier.
     const rawArg = argMatch[0];
+    if (!isConcatenated && quoted === undefined) {
+      const value = assigned.get(rawArg.trim());
+      if (value !== undefined) {
+        refs.push({ rel, target: value, line, raw: truncateRaw(full), literal: true, value: 'assigned' });
+        return;
+      }
+    }
+    // not a plain literal: dynamic or concatenated
     refs.push({
       rel,
       target: rawArg,
@@ -151,6 +189,8 @@ export function scanLiquid(file: { id: string; content: string }): ScannerResult
       refs.push({ rel, target, line, raw: truncateRaw(m[0]), literal: true });
     }
   }
+
+  refs.push(...customElementRefs(content));
 
   return { refs };
 }
