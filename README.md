@@ -55,11 +55,13 @@ Requires **Node ≥ 22.6**.
 ```bash
 nerve scan  [path] [flags]    # writes .nervegraph/graph.json
 nerve view         [flags]    # serves the interactive map
+nerve overview     [flags]    # how the project is laid out, in ~1 KB
 nerve query <file> [flags]    # what uses this file, and what it uses
 nerve check        [flags]    # fail the build when the graph breaks a budget
 nerve diff <a> [b] [flags]    # what changed structurally between two graphs
 nerve export       [flags]    # the graph as mermaid or dot text
 nerve mcp          [flags]    # serve the graph to an agent over MCP (stdio)
+nerve agents-md               # a snippet for CLAUDE.md / AGENTS.md
 ```
 
 ### `nerve scan`
@@ -98,9 +100,18 @@ between two files, and the focus controls.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--json` | off | The card as JSON and nothing else — pipe-safe |
+| `--json` | off | The card as JSON and nothing else — one line, pipe-safe |
+| `--pretty` | off | Indent the JSON |
+| `--limit <n>` | `50` | Entries per list; `0` = all. Dropped counts go under `truncated` |
+| `--raw` | off | Include the source text of each reference |
 | `--depth <n>` | — | Also list files within n hops |
-| `--orphans` | off | List every file nothing references |
+| `--direction <d>` | `both` | `in` (dependents) or `out` (dependencies) for `--depth` |
+| `--transitive` | off | List every transitive dependent, not just the count |
+| `--symbol <name>` | — | Where an export is defined, and every `file:line` importing it |
+| `--changed` | off | Files changed in git, their dependents, and the tests to run |
+| `--base <ref>` | — | With `--changed`: also changes since this ref |
+| `--orphans` | off | List unreferenced code files (`--all` adds tests, fixtures, docs, config) |
+| `--fields <a,b>` | — | List modes: keep only these row fields |
 | `--missing` | off | List referenced files that aren't on disk |
 | `--unresolved` | off | List references static analysis couldn't follow |
 | `--risk <level>` | — | List files at `low`, `medium` or `high` risk |
@@ -113,9 +124,13 @@ between two files, and the focus controls.
 ```
 $ nerve query src/graph/types.ts
 src/graph/types.ts
-  typescript javascript · 122 loc · risk high
+  typescript javascript · 146 loc · risk high
   34 dependents (50 transitive) · 0 dependencies
 ```
+
+In `--json`, `usedBy` and `uses` hold one entry per file —
+`{ file, rel, lines, names }` — and `tests` lists the test files that reach the
+file, however indirectly: what to run after editing it.
 
 ### `nerve check`
 
@@ -149,6 +164,7 @@ Layer rules are yours to write — the tool only checks what you declared:
 ### `nerve diff` and `nerve export`
 
 ```bash
+nerve diff                                 # what the last re-scan changed (scan keeps graph.prev.json)
 nerve diff old-graph.json                  # against .nervegraph/graph.json
 nerve export --format mermaid --focus src/graph/build.ts --depth 1
 nerve export --format dot --out graph.dot
@@ -169,23 +185,23 @@ npx nervegraph view          # → http://localhost:4210
 
 ### For AI agents
 
-`graph.json` is plain, sorted, deterministic JSON, so an agent (Claude Code,
-Cursor) can read the dependency map instead of grepping the whole repo:
+Don't read `graph.json` itself — on a real repo it is hundreds of kilobytes
+(tens of thousands of tokens). Ask it questions instead; every answer is a few
+kilobytes of one-line JSON:
 
 ```bash
-nerve query snippets/product-card.liquid --json
+nerve scan --quiet
+nerve overview --json                     # 1. layout, entrypoints, hubs, issue counts
+nerve query src/graph/io.ts --json        # 2. before an edit: usedBy, uses, tests, risk
+nerve query --symbol readGraph --json     # 3. before a rename: every import site
+nerve query --changed --json              # 4. after edits: dependents and tests to run
 ```
 
 `usedBy` lists what breaks if the file changes, `transitiveDependents` is the
-full blast radius, and `stale: true` means the file changed since the scan —
-run `nerve scan` first. The whole map is also readable directly:
-
-```bash
-nerve scan --quiet && cat .nervegraph/graph.json
-```
-
-Keep it fresh while working: `nerve scan --watch` in one terminal, `nerve view`
-in another — the map reloads itself on every re-scan.
+full blast radius, `tests` the test files that reach it, and `stale: true`
+means the file changed since the scan — run `nerve scan` first. Lists are
+capped at `--limit` (default 50) with the dropped counts under `truncated`.
+`nerve agents-md >> CLAUDE.md` writes a short note telling an agent all this.
 
 Agents that speak MCP can skip the shell entirely:
 
@@ -193,10 +209,12 @@ Agents that speak MCP can skip the shell entirely:
 { "mcpServers": { "nervegraph": { "command": "npx", "args": ["nervegraph", "mcp"] } } }
 ```
 
-It exposes two tools — `nervegraph_query` (one file's dependents, dependencies,
-risk and blast radius) and `nervegraph_list` (orphans, missing files, high-risk
-files, unused exports, duplicates, cycles). The graph is re-read on every call,
-so `nerve scan --watch` keeps the agent current.
+Five tools: `nervegraph_overview` (start here), `nervegraph_query` (one file),
+`nervegraph_symbol` (one export), `nervegraph_changed` (git changes, their
+dependents and tests) and `nervegraph_list` (orphans, missing, unresolved,
+risk, unused exports, duplicates, cycles, packages). The graph is re-read on
+every call and re-scanned first when it is missing or a file changed since
+the scan; `nerve mcp --no-autoscan` turns that off.
 
 ---
 
@@ -273,8 +291,8 @@ Deliberate, and cheaper to state than to hide:
 Open someone else's 60,000-line theme and understand its architecture in 10 seconds.
 See who uses a file before deleting it. See what breaks before editing a snippet.
 
-A useful side effect: `graph.json` is machine-readable, so an AI agent (Claude Code, Cursor)
-can read the map instead of grepping the whole repo.
+A useful side effect: the graph is queryable, so an AI agent (Claude Code, Cursor)
+can ask it what a file touches instead of grepping the whole repo.
 
 ---
 

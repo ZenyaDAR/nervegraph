@@ -25,7 +25,9 @@ export function collectChurn(root: string, limit = DEFAULT_COMMITS): Map<string,
   try {
     out = execFileSync(
       'git',
-      ['log', `-n${limit}`, '--name-only', '--pretty=format:', '--no-renames', '--diff-filter=d'],
+      // quotePath=false: otherwise git prints non-ASCII paths as quoted octal
+      // escapes ("src/\320\260.js") that never match a node id.
+      ['-c', 'core.quotePath=false', 'log', `-n${limit}`, '--name-only', '--pretty=format:', '--no-renames', '--diff-filter=d'],
       { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] },
     );
   } catch {

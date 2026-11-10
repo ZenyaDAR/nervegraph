@@ -1,8 +1,11 @@
 import path from 'node:path';
 import { existsSync, statSync } from 'node:fs';
-import { buildGraph } from '../graph/build.ts';
+import { buildGraph, type ScanOptions } from '../graph/build.ts';
 import { writeGraphAtomic } from '../graph/io.ts';
+import { isExternal } from '../graph/analysis.ts';
+import type { Graph } from '../graph/types.ts';
 import { printScanReport } from '../report.ts';
+import { PROFILES, type Profile } from '../scan/profile.ts';
 
 export interface ScanArgs {
   path?: string;
@@ -20,6 +23,11 @@ export interface ScanArgs {
 
 export async function runScan(args: ScanArgs): Promise<number> {
   const root = path.resolve(args.path ?? '.');
+
+  if (args.profile !== undefined && args.profile !== 'auto' && !PROFILES.includes(args.profile as Profile)) {
+    console.error(`error: unknown profile "${args.profile}" (${[...PROFILES, 'auto'].join(' | ')})`);
+    return 2;
+  }
 
   if (!existsSync(root) || !statSync(root).isDirectory()) {
     console.error(`error: path does not exist or is not a directory: ${root}`);
@@ -58,7 +66,11 @@ async function scanOnce(args: ScanArgs, root: string): Promise<number> {
   const outPath = path.join(outDir, 'graph.json');
 
   if (args.json) {
-    console.log(JSON.stringify({ graph: outPath, stats: graph.stats, durationMs: graph.durationMs }));
+    const external = graph.unresolved.filter(isExternal).length;
+    console.log(JSON.stringify({
+      graph: outPath, stats: graph.stats, durationMs: graph.durationMs,
+      unresolved: { external, unresolved: graph.unresolved.length - external },
+    }));
   } else {
     printScanReport(graph, outPath, size, !!args.quiet);
   }
@@ -92,18 +104,36 @@ async function watchLoop(args: ScanArgs, root: string): Promise<number> {
     }
   }
 
+  const outDir = path.resolve(args.out ?? '.nervegraph');
   const watcher = watch(root, { recursive: true }, (_event, file) => {
-    // Our own output would otherwise trigger the next scan forever.
-    const name = String(file ?? '').replace(/\\/g, '/');
-    if (name.includes('.nervegraph/') || name.includes('node_modules/') || name.includes('.git/')) return;
+    if (isIgnoredWatchEvent(root, outDir, file)) return;
     clearTimeout(timer);
     timer = setTimeout(() => void rescan(), DEBOUNCE_MS);
   });
 
-  if (!args.quiet) console.log('  watching for changes — press Ctrl+C to stop\n');
+  // stderr under --json, so stdout stays one JSON document per scan.
+  if (!args.quiet) (args.json ? console.error : console.log)('  watching for changes — press Ctrl+C to stop\n');
 
   await new Promise<void>((resolve) => {
     process.on('SIGINT', () => { watcher.close(); resolve(); });
   });
   return 0;
+}
+
+const IGNORED_DIRS = new Set(['node_modules', '.git']);
+
+/**
+ * True for a watch event that must not trigger a re-scan: anything inside the
+ * output dir (our own write would otherwise re-scan forever — Windows reports
+ * the bare dir name `.nervegraph`, and `--out` can point anywhere), or inside
+ * node_modules / .git.
+ */
+export function isIgnoredWatchEvent(root: string, outDir: string, file: string | Buffer | null | undefined): boolean {
+  if (file == null) return false;
+  const name = String(file);
+  if (name.split(/[\\/]/).some(part => IGNORED_DIRS.has(part))) return true;
+  const fold = (s: string) => (process.platform === 'win32' ? s.toLowerCase() : s);
+  const abs = fold(path.resolve(root, name));
+  const out = fold(path.resolve(outDir));
+  return abs === out || abs.startsWith(out + path.sep);
 }

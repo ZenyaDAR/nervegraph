@@ -2,6 +2,108 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioning per [SemVer](https://semver.org/).
 
+## [0.5.0] — 2026-11-10
+
+Agent-facing: answers small enough for a context window, and the questions an
+agent asks first. `graph.json` stays on schema 4.
+
+### Added
+- **`nerve overview [--json]`** — languages, top folders, entrypoints, hub and
+  fan-out files, cycle/missing/orphan/unresolved counts, staleness and the next
+  commands to try, in about a kilobyte.
+- **`nerve query --symbol <name>`** — where an export is defined and every
+  `file:line` that imports it by name; namespace imports of the exporter are
+  listed apart as possible sites.
+- **`nerve query --changed [--base <ref>]`** — files changed in git (working
+  tree, plus vs a ref), their direct and transitive dependents, and the tests
+  to run. Read-only git (`status`, `diff --name-only`).
+- **Tests covering a file** — the card's `tests` lists test files that reach
+  it transitively (`test/`, `__tests__/`, `*.test.*`, `*.spec.*`, `test_*.py`,
+  `*_test.go`, `*_spec.rb`, …). `--transitive` lists every dependent;
+  `--direction in|out|both` steers `--depth`.
+- **`nerve agents-md`** — a ~12-line snippet for CLAUDE.md / AGENTS.md: the key
+  commands, entrypoints, hubs, and a warning not to read `graph.json` whole.
+- **`nerve diff` with no arguments** — `scan` now keeps the previous graph as
+  `graph.prev.json`, and `diff` compares the two.
+- **MCP** — tools `nervegraph_overview`, `nervegraph_symbol` and
+  `nervegraph_changed`; `nervegraph_query` takes `depth`, `direction`,
+  `transitive`, `raw` and `limit`; `nervegraph_list` adds `unresolved` and
+  `packages` and takes `all`, `fields` and `limit`. A missing or stale graph is
+  re-scanned before a call (`nerve mcp --no-autoscan` turns that off).
+
+### Changed
+- **Compact `--json`** — `query`, `overview`, `diff --json` and MCP results are one line;
+  `--pretty` indents. `usedBy` / `uses` are grouped per file as
+  `{ file, rel, lines, names? }` instead of one `{ file, rel, line, raw }` per
+  reference; `raw` comes back with `--raw`. Every list is capped at `--limit`
+  (default 50, `0` = all) and dropped counts are reported under `truncated`.
+  List modes report `total`, and take `--fields a,b`; their rows drop the
+  always-implied `orphan` / `missing` flags.
+- **Orphans by kind** — each orphan is classed as code, entry, test, fixture,
+  doc, config or asset. `query --orphans` lists only code unless `--all`, with
+  counts per kind (`byKind`); the scan report and overview show the split.
+- **Entrypoints** — package.json `main` / `module` / `bin` / `exports` paths
+  under tsconfig's `outDir` map back to their source under `rootDir`
+  (`bin: dist/cli.js` marks `src/cli.ts`).
+- **Risk** — an entrypoint is no longer high by default: medium when it imports
+  something, low when it is a leaf (a locale file, say). Docs and media are
+  always low. Dependents and churn decide the rest, as before.
+- **Unresolved vs external** — the scan report, `scan --json` and the overview
+  count external references (packages, builtins, URLs) apart from references
+  that genuinely could not be followed.
+
+- **`check` budgets** — `--max-unresolved` counts only references that could
+  not be followed (not npm packages, builtins or URLs); `--max-orphans` counts
+  only orphan code files.
+- **`vendor/`, `dist/`, `build/`, `*.min.*`** are listed but not scanned, so a
+  `<script src="vendor/x.js">` is an edge, not a missing file.
+
+### Security
+- **Viewer XSS** — a node label built from an import string was rendered as
+  HTML in the tooltip; a cloned repo could run script on the viewer page.
+  Labels are now text.
+- **DNS rebinding** — the viewer server answers only `localhost` /
+  `127.0.0.1` / `[::1]` Host headers.
+
+### Fixed
+- **TypeScript** — `import './x.js'` resolves to `x.ts` (NodeNext style);
+  export names for `abstract class`, `declare`, `const enum`, `type`,
+  `interface`, `namespace`; `export type { … } from` keeps its edge.
+- **tsconfig / workspaces** — `paths` picks the most specific pattern;
+  `extends` is followed; workspace packages honour `exports`, `main`, `module`.
+- **False edges** — `require()` inside comments and strings; Python imports in
+  docstrings; Terraform `source` outside a `module` block.
+- **Determinism** — `graph.json` no longer depends on file-read order.
+- **Python** — CRLF files lost every import; multi-line `from x import (…)`;
+  one missing node per missing module, not per name; packages outside
+  `src/`/`lib/`.
+- **Shopify** — `content_for 'blocks'` / `'block', type:`; theme blocks used
+  from template JSON; `{% doc %}`; `echo … | asset_url` in `{% liquid %}`.
+- **CSS / HTML / Markdown** — `url(f.eot?#iefix)`, `?v=` query strings,
+  `url(#id)`, Sass `@use 'sass:…'` and `@forward`, `//` comments in SCSS;
+  root-relative `src="/app.js"` next to the page; inline module scripts in
+  `.html`; percent-encoded Markdown links.
+- **Go / PHP / Rust / C** — nested `go.mod`; PSR-0; `#` inside PHP strings;
+  `src/bin/*.rs` and `build.rs` as crate roots, `#[cfg(test)] mod x;`,
+  `"/*"` in Rust strings; `..` in C include roots.
+- **Files** — dotfiles are scanned; nested `.gitignore` files apply;
+  gitignored files that are imported are not "missing"; `import './'`;
+  case-only matches warn (`case_mismatch`); duplicate imports keep all names;
+  git churn for non-ASCII paths.
+- **MCP** — replies in flight when stdin closed were lost; `ping`; JSON-RPC
+  error codes (-32700/-32600/-32601); tool failures come back as `isError`
+  results; an ambiguous or empty `file` no longer picks an arbitrary node.
+- **CLI** — absolute paths and `.\src\x` work in `query` and `export --focus`
+  (which now accepts short names); `--help` / `--version` exit 0 on stdout;
+  bad flags exit 2; `--max-cycles abc` is rejected instead of passing;
+  malformed `rules.json` and `graph.json` give a clear error; `scan --watch`
+  no longer rescans forever on Windows or with `--out`; `view --port 0`;
+  `export --format dot` escaping; deep `--depth` on large graphs is fast.
+
+### Removed
+- README advice to `cat .nervegraph/graph.json` — on a real repo that is tens
+  of thousands of tokens; the query commands answer the same questions.
+
 ## [0.4.0] — 2026-08-18
 
 `graph.json` moves to **schema 4** — additive only: new fields and one new

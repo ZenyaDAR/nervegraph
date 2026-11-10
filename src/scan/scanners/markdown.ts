@@ -24,7 +24,13 @@ export function scanMarkdown(file: { id: string; content: string }): ScannerResu
   function push(target: string, index: number, raw: string, isImage: boolean) {
     // A bare "#section" is an in-page anchor, not a reference to a file.
     if (target.startsWith('#')) return;
-    const clean = target.split('#')[0];
+    // `my%20guide.md?plain=1#intro` is the file `my guide.md`.
+    let clean = target.split('#')[0].split('?')[0];
+    try {
+      clean = decodeURIComponent(clean);
+    } catch {
+      // a stray `%` that isn't an escape: keep the target as written
+    }
     if (!clean) return;
     const rel = isImage ? 'asset' : 'md_link';
     const line = lineAt(content, index);

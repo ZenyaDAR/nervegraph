@@ -1,31 +1,13 @@
 import path from 'node:path';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { readGraph } from '../graph/io.ts';
 import { VERSION } from '../version.ts';
-import { createServer } from '../server.ts';
-import { SCHEMA_VERSION } from '../graph/types.ts';
+import { createServer, listenOnFreePort } from '../server.ts';
 
 export interface ViewArgs {
   port?: number;
   noOpen?: boolean;
   graph?: string;
-}
-
-async function findFreePort(start: number): Promise<number> {
-  const net = await import('node:net');
-  let port = start;
-  // ponytail: linear probe, fine for a local dev server on a handful of ports
-  for (let i = 0; i < 50; i++) {
-    const free = await new Promise<boolean>((resolve) => {
-      const srv = net.createServer();
-      srv.once('error', () => resolve(false));
-      srv.once('listening', () => srv.close(() => resolve(true)));
-      srv.listen(port, '127.0.0.1');
-    });
-    if (free) return port;
-    port++;
-  }
-  return start;
 }
 
 export async function runView(args: ViewArgs): Promise<number> {
@@ -37,17 +19,14 @@ export async function runView(args: ViewArgs): Promise<number> {
     return 5;
   }
 
+  // Validates the shape and rejects a schemaVersion newer than this tool.
   const graph = await readGraph(graphPath);
-  if (graph.schemaVersion > SCHEMA_VERSION) {
-    console.error(`error: graph.json schemaVersion (${graph.schemaVersion}) is newer than this tool understands (${SCHEMA_VERSION}).`);
-    console.error('update nervegraph and try again.');
-    return 6;
-  }
 
-  const port = await findFreePort(args.port ?? 4210);
   const server = createServer(graphPath);
-
-  await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
+  // Bind first, probe on EADDRINUSE: a separate probe can race another process,
+  // and port 0 is only known after the bind.
+  const port = await listenOnFreePort(server, args.port ?? 4210);
+  server.on('error', (e) => console.error(`server error: ${e.message}`));
 
   const scannedAgoMs = Date.now() - new Date(graph.scannedAt).getTime();
   const scannedAgo = formatAgo(scannedAgoMs);

@@ -9,11 +9,14 @@ import { TEXT_EXT } from './extensions.ts';
 const require = createRequire(import.meta.url);
 const ignoreLib: (options?: unknown) => { add(p: unknown): unknown; ignores(p: string): boolean } = require('ignore');
 
-const ALWAYS_IGNORE = [
-  '**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**',
-  '**/.nervegraph/**', '**/*.min.js', '**/*.min.css', '**/vendor/**',
-  '**/coverage/**', '**/.next/**', '**/.nuxt/**',
+// Never listed at all.
+const NEVER_LIST = [
+  '**/node_modules/**', '**/.git/**', '**/.git',
+  '**/.nervegraph/**', '**/coverage/**', '**/.next/**', '**/.nuxt/**',
 ];
+// Listed (so imports of them resolve) but never scanned.
+const LIST_ONLY = ['**/dist/**', '**/build/**', '**/*.min.js', '**/*.min.css', '**/vendor/**'];
+const ALWAYS_IGNORE = [...NEVER_LIST, ...LIST_ONLY];
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
 
@@ -30,6 +33,8 @@ export interface FilesResult {
   tooLarge: string[];
   readErrors: { file: string; message: string }[];
   binaryLeaves: { id: string; size: number; mtime: number }[];
+  /** On disk but excluded by .gitignore / .nervegraphignore / extraIgnore. */
+  ignored: string[];
 }
 
 function toPosix(p: string): string {
@@ -42,29 +47,44 @@ export async function collectFiles(root: string, opts: {
 } = {}): Promise<FilesResult> {
   const ig = ignoreLib();
   ig.add(ALWAYS_IGNORE.map(p => p.replace(/^\*\*\//, '').replace(/\/\*\*$/, '')));
-  // fast-glob handles ALWAYS_IGNORE directly; ignore lib handles .gitignore + extra
-  if (!opts.noGitignore) {
-    const gi = path.join(root, '.gitignore');
-    if (existsSync(gi)) {
-      ig.add(readFileSync(gi, 'utf8'));
-    }
-  }
+  // fast-glob drops NEVER_LIST; ignore lib moves LIST_ONLY, .gitignore and extra into `ignored`
   const ngi = path.join(root, '.nervegraphignore');
   if (existsSync(ngi)) {
     ig.add(readFileSync(ngi, 'utf8'));
   }
   if (opts.extraIgnore?.length) ig.add(opts.extraIgnore);
 
-  const entries = await fg('**/*', {
+  // Dotted paths are real project files (.storybook/main.ts, .config.js);
+  // only the always-ignored ones (.git, .next, …) are skipped.
+  const entries = (await fg('**/*', {
     cwd: root,
-    ignore: ALWAYS_IGNORE,
+    ignore: NEVER_LIST,
     onlyFiles: true,
-    dot: false,
+    dot: true,
     followSymbolicLinks: false,
     absolute: false,
-  });
+  })).sort();
 
-  const relevant = entries.filter(e => !ig.ignores(e));
+  // Every .gitignore applies to its own directory and below, with patterns
+  // relative to that directory — not only the root one.
+  const gitignores: { dir: string; ig: ReturnType<typeof ignoreLib> }[] = [];
+  if (!opts.noGitignore) {
+    for (const e of entries) {
+      if (e !== '.gitignore' && !e.endsWith('/.gitignore')) continue;
+      const dir = e.slice(0, -'.gitignore'.length);
+      const gi = ignoreLib();
+      gi.add(readFileSync(path.join(root, e), 'utf8'));
+      gitignores.push({ dir, ig: gi });
+    }
+  }
+  const isIgnored = (e: string) =>
+    ig.ignores(e) || gitignores.some(g => e.startsWith(g.dir) && g.ig.ignores(e.slice(g.dir.length)));
+
+  const relevant: string[] = [];
+  // Ignored files are not scanned, but they are on disk: an import of a
+  // gitignored generated file must not become a "missing" node.
+  const ignored: string[] = [];
+  for (const e of entries) (isIgnored(e) ? ignored : relevant).push(e);
 
   const files: ScannedFile[] = [];
   const tooLarge: string[] = [];
@@ -101,7 +121,15 @@ export async function collectFiles(root: string, opts: {
 
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
 
-  return { files, tooLarge, readErrors, binaryLeaves };
+  // Workers finish in whatever order the disk answers; sort so two scans of
+  // the same tree produce the same graph.
+  const byId = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+  files.sort((a, b) => byId(a.id, b.id));
+  binaryLeaves.sort((a, b) => byId(a.id, b.id));
+  readErrors.sort((a, b) => byId(a.file, b.file));
+  tooLarge.sort(byId);
+
+  return { files, tooLarge, readErrors, binaryLeaves, ignored: ignored.map(toPosix) };
 }
 
 export function hashContent(content: string): string {

@@ -125,8 +125,11 @@ test('diff names what changed structurally', () => {
 test('check budgets only fire when set', () => {
   const graph = {
     stats: { files: 2, edges: 2, unresolved: 3, orphans: 1, byType: {} },
-    nodes: [{ id: 'a.js', deadExports: ['x'] }],
-    unresolved: [{ from: 'a.js', line: 1, rel: 'import', raw: "import 'x'", reason: 'external', hint: '' }],
+    nodes: [{ id: 'a.js', orphan: true, deadExports: ['x'] }, { id: 'test/a.test.js', orphan: true }],
+    unresolved: [
+      { from: 'a.js', line: 1, rel: 'import', raw: "import 'x'", reason: 'external', hint: '' },
+      { from: 'a.js', line: 2, rel: 'import', raw: "import(x)", reason: 'dynamic', hint: '' },
+    ],
     cycles: [['a.js', 'b.js', 'a.js']],
     duplicates: [['a.js', 'b.js']],
   } as unknown as Graph;
@@ -134,8 +137,11 @@ test('check budgets only fire when set', () => {
   assert.deepEqual(collectViolations(graph, {}), []);
   assert.equal(collectViolations(graph, { maxCycles: 0 })[0].rule, 'cycles');
   assert.equal(collectViolations(graph, { maxCycles: 1 }).length, 0);
-  assert.equal(collectViolations(graph, { maxUnresolved: 2 })[0].actual, 3);
-  assert.equal(collectViolations(graph, { maxOrphans: 0 })[0].rule, 'orphan files');
+  // external refs (npm, builtins) and non-code orphans (tests) are not counted
+  assert.equal(collectViolations(graph, { maxUnresolved: 0 })[0].actual, 1);
+  assert.equal(collectViolations(graph, { maxUnresolved: 1 }).length, 0);
+  assert.equal(collectViolations(graph, { maxOrphans: 0 })[0].actual, 1);
+  assert.equal(collectViolations(graph, { maxOrphans: 0 })[0].rule, 'orphan code files');
   assert.equal(collectViolations(graph, { noDeadExports: true })[0].rule, 'files with unused exports');
   assert.equal(collectViolations(graph, { noDuplicates: true })[0].rule, 'duplicate file groups');
 });

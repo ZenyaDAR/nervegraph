@@ -3,7 +3,7 @@ import { langFor, type Lang } from '../extensions.ts';
 import { shopifyJsonLanguage } from './shopify-json.ts';
 import { scanLiquid } from '../scanners/liquid.ts';
 import { scanJavaScript } from '../scanners/javascript.ts';
-import { scanHtml } from '../scanners/html.ts';
+import { scanHtmlPage } from '../scanners/html.ts';
 import { scanCss } from '../scanners/css.ts';
 import { scanPython } from '../scanners/python.ts';
 import { scanRuby } from '../scanners/ruby.ts';
@@ -40,7 +40,7 @@ const LANGUAGES: LanguageModule[] = [
   byLang('liquid', ['liquid'], scanLiquid),
   shopifyJsonLanguage,
   byLang('javascript', ['javascript', 'typescript'], scanJavaScript),
-  byLang('html', ['html'], scanHtml),
+  byLang('html', ['html'], scanHtmlPage),
   byLang('css', ['css'], scanCss),
   byLang('python', ['python'], scanPython),
   byLang('ruby', ['ruby'], scanRuby),

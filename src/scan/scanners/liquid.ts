@@ -1,12 +1,13 @@
 import type { RawRef, ScannerResult } from '../../graph/types.ts';
 import { customElementRefs } from './util.ts';
 
-// Replace {% comment %}...{% endcomment %} and {% raw %}...{% endraw %} bodies
-// with an equal number of newlines so line numbers stay correct, but the
-// content itself produces no matches.
+// Replace {% comment %}, {% doc %} and {% raw %} bodies with an equal number
+// of newlines so line numbers stay correct, but the content itself (a doc
+// block's `{% render 'x' %}` usage example, say) produces no matches.
 function stripCommentsAndRaw(content: string): string {
   return content
     .replace(/\{%-?\s*comment\s*-?%\}[\s\S]*?\{%-?\s*endcomment\s*-?%\}/g, m => '\n'.repeat(countNewlines(m)))
+    .replace(/\{%-?\s*doc\s*-?%\}[\s\S]*?\{%-?\s*enddoc\s*-?%\}/g, m => '\n'.repeat(countNewlines(m)))
     .replace(/\{%-?\s*raw\s*-?%\}[\s\S]*?\{%-?\s*endraw\s*-?%\}/g, m => '\n'.repeat(countNewlines(m)));
 }
 
@@ -121,10 +122,35 @@ export function scanLiquid(file: { id: string; content: string }): ScannerResult
       const full = m[0];
       const args = m[1].trim();
       const line = lineAt(content, m.index);
+      if (rel === 'content_for') {
+        handleContentFor(args, full, line);
+        continue;
+      }
       const argMatch = firstArgRe.exec(args);
       handleArg(argMatch, full, line, rel);
     }
   }
+
+  // `{% content_for 'blocks' %}` renders whichever blocks the merchant added —
+  // it names no file. `{% content_for 'block', type: 'slide', id: 'x' %}`
+  // renders one static theme block, blocks/slide.liquid: the file is the
+  // `type`, not the first argument.
+  function handleContentFor(args: string, full: string, line: number) {
+    const kind = firstArgRe.exec(args);
+    const name = kind?.[1] ?? kind?.[2];
+    if (name === 'blocks') return;
+    if (name !== 'block') {
+      handleArg(kind, full, line, 'content_for');
+      return;
+    }
+    const type = /\btype\s*:\s*/.exec(args);
+    if (!type) return;
+    const value = args.slice(type.index + type[0].length).split(',')[0].trim();
+    handleArg(firstArgRe.exec(value), full, line, 'content_for');
+  }
+
+  // `echo 'x' | asset_url` / `assign u = 'x' | asset_url` inside {% liquid %}.
+  const liquidAssetRe = new RegExp(`^(?:echo|assign\\s+[\\w-]+\\s*=)\\s*(?:${QUOTED})\\s*\\|\\s*asset(?:_img)?_url\\b`);
 
   // {{ 'file.js' | asset_url }} / asset_img_url
   const assetRe = new RegExp(`\\{\\{\\s*(?:${QUOTED})\\s*\\|\\s*asset(?:_img)?_url[^}]*\\}\\}`, 'g');
@@ -161,11 +187,19 @@ export function scanLiquid(file: { id: string; content: string }): ScannerResult
       for (const rawLine of lines) {
         const trimmed = rawLine.trim();
         const tagMatch = /^(render|include|section|sections|content_for)\s+(.+)$/.exec(trimmed);
+        const lineNo = lineAt(content, blockStart + offset);
         if (tagMatch) {
           const rel = (tagMatch[1] === 'sections' ? 'section_group' : tagMatch[1]) as RawRef['rel'];
-          const argMatch = firstArgRe.exec(tagMatch[2].trim());
-          const lineNo = lineAt(content, blockStart + offset);
-          handleArg(argMatch, trimmed, lineNo, rel);
+          if (rel === 'content_for') {
+            handleContentFor(tagMatch[2].trim(), trimmed, lineNo);
+          } else {
+            const argMatch = firstArgRe.exec(tagMatch[2].trim());
+            handleArg(argMatch, trimmed, lineNo, rel);
+          }
+        }
+        const asset = liquidAssetRe.exec(trimmed);
+        if (asset) {
+          refs.push({ rel: 'asset_url', target: asset[1] ?? asset[2], line: lineNo, raw: truncateRaw(trimmed), literal: true });
         }
         offset += rawLine.length + 1;
       }

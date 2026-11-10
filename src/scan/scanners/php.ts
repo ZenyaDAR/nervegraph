@@ -11,13 +11,12 @@ import { lineAt, truncate, blank } from './util.ts';
 
 const REQUIRE_RE = /\b(?:require|include)(?:_once)?\s*\(?\s*(['"])([^'"\n]+)\1/g;
 const USE_RE = /^[ \t]*use[ \t]+(?:function[ \t]+|const[ \t]+)?\\?([A-Za-z_][\w\\]*)/gm;
-const LINE_COMMENT_RE = /(?:\/\/|#).*$/gm;
-const BLOCK_COMMENT_RE = /\/\*[\s\S]*?\*\//g;
+// Quoted strings are matched (and kept) so that a `#` or `//` inside one —
+// `require 'lib#v2.php';` — is not taken for the start of a comment.
+const CODE_TOKEN_RE = /'(?:\\[\s\S]|[^'\\])*'|"(?:\\[\s\S]|[^"\\])*"|\/\*[\s\S]*?\*\/|(?:\/\/|#).*$/gm;
 
 export function scanPhp(file: { id: string; content: string }): ScannerResult {
-  const content = file.content
-    .replace(BLOCK_COMMENT_RE, blank)
-    .replace(LINE_COMMENT_RE, blank);
+  const content = file.content.replace(CODE_TOKEN_RE, m => (m[0] === "'" || m[0] === '"' ? m : blank(m)));
 
   const refs: RawRef[] = [];
 

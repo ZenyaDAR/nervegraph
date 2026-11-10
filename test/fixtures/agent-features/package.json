@@ -1,0 +1,5 @@
+{
+  "name": "agent-features-fixture",
+  "private": true,
+  "bin": { "af": "dist/cli.js" }
+}

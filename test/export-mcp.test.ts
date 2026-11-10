@@ -39,7 +39,10 @@ test('subgraph walks both directions and stops at the depth given', () => {
 test('the MCP tools answer from the same graph', async () => {
   const card = JSON.parse(await callTool(GRAPH, 'nervegraph_query', { file: 'b.js' }));
   assert.equal(card.file, 'b.js');
-  assert.deepEqual(card.usedBy, [{ file: 'a.js', rel: 'import', line: 2, raw: "import './b.js'" }]);
+  // Grouped per file; `raw` only on request.
+  assert.deepEqual(card.usedBy, [{ file: 'a.js', rel: 'import', lines: [2] }]);
+  const withRaw = JSON.parse(await callTool(GRAPH, 'nervegraph_query', { file: 'b.js', raw: true }));
+  assert.deepEqual(withRaw.usedBy[0].raw, ["import './b.js'"]);
   assert.deepEqual(card.deadExports, ['unused']);
 
   const dupes = JSON.parse(await callTool(GRAPH, 'nervegraph_list', { kind: 'duplicates' }));

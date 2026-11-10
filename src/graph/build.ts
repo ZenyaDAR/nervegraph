@@ -4,9 +4,9 @@ import { detectProfile, classifyNodeType, isEntrypoint } from '../scan/profile.t
 import { langFor } from '../scan/extensions.ts';
 import { VERSION } from '../version.ts';
 import { findLanguage } from '../scan/languages/index.ts';
-import { loadAliases, loadGoModule, loadPsr4 } from '../scan/aliases.ts';
+import { loadAliases, loadGoModules, loadPsr4 } from '../scan/aliases.ts';
 import { resolveRefs } from './resolve.ts';
-import { markDeadExports, findDuplicates } from './analysis.ts';
+import { markDeadExports, findDuplicates, packageEntrypoints, riskFor } from './analysis.ts';
 import { collectChurn, hotThreshold } from '../scan/git.ts';
 import type { Graph, GraphNode, GraphEdge, UnresolvedRef, Warning, RawRef, Risk } from './types.ts';
 import { SCHEMA_VERSION } from './types.ts';
@@ -29,24 +29,12 @@ function countLoc(content: string): number {
   return content.replace(/\n$/, '').split('\n').length;
 }
 
-// A file everything depends on is risky; a file everything depends on *and*
-// that changes every week is riskier still. Churn only ever promotes one step,
-// and only for a file something already depends on — a hot leaf is just a file
-// under active development, not a hazard.
-function riskFor(inDeg: number, entrypoint: boolean, hot: boolean): Risk {
-  if (entrypoint) return 'high';
-  if (inDeg >= 10) return 'high';
-  if (inDeg >= 3) return hot ? 'high' : 'medium';
-  if (inDeg >= 1 && hot) return 'medium';
-  return 'low';
-}
-
 export async function buildGraph(opts: ScanOptions): Promise<Graph> {
   const start = Date.now();
   const root = opts.root;
   const { profile, warning: profileWarning } = detectProfile(root, opts.profile);
 
-  const { files, tooLarge, readErrors, binaryLeaves } = await collectFiles(root, {
+  const { files, tooLarge, readErrors, binaryLeaves, ignored } = await collectFiles(root, {
     extraIgnore: opts.extraIgnore,
     noGitignore: opts.noGitignore,
   });
@@ -64,14 +52,16 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
 
   const aliases = loadAliases(root);
   const psr4 = loadPsr4(root);
-  const goModule = loadGoModule(root);
 
   const fileById = new Map<string, ScannedFile>();
   for (const f of files) fileById.set(f.id, f);
 
   // Binary leaves are on disk but never content-scanned; they only become
   // nodes if something references them (or below, unconditionally as leaves).
-  const existingIds = new Set<string>([...fileById.keys(), ...binaryLeaves.map(b => b.id)]);
+  // Ignored files are on disk too: never scanned, but an import of one is not
+  // a "missing" file — it becomes a leaf node only if something references it.
+  const existingIds = new Set<string>([...fileById.keys(), ...binaryLeaves.map(b => b.id), ...ignored]);
+  const goModules = loadGoModules(root, existingIds);
   // Case-insensitive index built once. Resolving a reference whose case
   // doesn't match the file on disk used to scan every id, making a
   // case-sloppy repo O(files x refs).
@@ -122,7 +112,8 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
   }
 
   // Custom elements are resolved by name against the whole project, not by
-  // path, so they wait for every file to have been scanned.
+  // path, so they wait for every file to have been scanned. `files` is sorted
+  // by id, so when two files define one tag the winner is stable.
   const elementDefinedIn = new Map<string, string>();
   const elementRefs: { from: string; ref: RawRef }[] = [];
 
@@ -149,7 +140,16 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
     for (const ref of refs) if (ref.rel === 'custom_element') elementRefs.push({ from: file.id, ref });
     refs = refs.filter(r => r.rel !== 'custom_element');
 
-    const outcome = resolveRefs(file.id, refs, { profile, fileExists, defaultLocale, aliases, psr4, goModule, listDir });
+    const outcome = resolveRefs(file.id, refs, { profile, fileExists, defaultLocale, aliases, psr4, goModules, listDir });
+    for (const e of outcome.edges) {
+      if (outcome.missingTargets.has(e.to) || existingIds.has(e.to) || realId(e.to) === e.to) continue;
+      // Resolved only because the lookup ignores case: works on macOS and
+      // Windows, breaks on a Linux CI.
+      warnings.push({
+        code: 'case_mismatch', file: file.id,
+        message: `line ${e.line}: "${e.raw}" matches ${realId(e.to)} only case-insensitively (breaks on case-sensitive filesystems)`,
+      });
+    }
     const fileEdges = dedupeEdges(outcome.edges.map(e => ({ ...e, to: realId(e.to) })));
     edges.push(...fileEdges);
     unresolved.push(...outcome.unresolved);
@@ -207,6 +207,25 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
     }
   }
 
+  // Ignored files someone references: leaves like a binary, never scanned.
+  const ignoredSet = new Set(ignored);
+  for (const e of edges) {
+    if (!ignoredSet.has(e.to) || nodes.has(e.to)) continue;
+    nodes.set(e.to, {
+      id: e.to,
+      type: classifyNodeType(e.to, profile),
+      lang: langFor(e.to),
+      size: 0,
+      loc: 0,
+      hash: '',
+      in: 0,
+      out: 0,
+      risk: 'low',
+      orphan: false,
+      entrypoint: false,
+    });
+  }
+
   for (const id of missingIds) {
     if (!nodes.has(id)) {
       nodes.set(id, {
@@ -234,11 +253,14 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
   const churn = opts.noGit ? new Map<string, number>() : collectChurn(root);
   const hotAt = hotThreshold(churn);
 
+  // package.json main/bin/exports (mapped dist → src) are entrypoints too.
+  const pkgEntries = profile === 'shopify' ? new Set<string>() : packageEntrypoints(root);
   for (const n of nodes.values()) {
     const commits = churn.get(n.id);
     if (commits !== undefined) n.churn = commits;
-    n.risk = riskFor(n.in, n.entrypoint, (commits ?? 0) >= hotAt);
-    n.orphan = n.in === 0 && !n.entrypoint;
+    if (!n.missing && pkgEntries.has(n.id)) n.entrypoint = true;
+    n.risk = riskFor(n, (commits ?? 0) >= hotAt);
+    n.orphan = n.in === 0 && !n.entrypoint && !n.missing;
   }
 
   markDeadExports(nodes, edges);
@@ -246,10 +268,14 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
   const duplicates = findDuplicates(nodes.values());
 
   const sortedNodes = [...nodes.values()].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  // Plain code-unit comparison, not localeCompare: the order must not depend
+  // on the machine's locale/ICU data, or two scans of one tree would differ.
   const sortedEdges = [...edges].sort((a, b) =>
-    a.from.localeCompare(b.from) || a.to.localeCompare(b.to) || a.rel.localeCompare(b.rel) || a.line - b.line);
+    cmp(a.from, b.from) || cmp(a.to, b.to) || cmp(a.rel, b.rel) || a.line - b.line || cmp(a.raw, b.raw));
   const sortedUnresolved = [...unresolved].sort((a, b) =>
-    a.from.localeCompare(b.from) || a.line - b.line);
+    cmp(a.from, b.from) || a.line - b.line || cmp(a.rel, b.rel) || cmp(a.raw, b.raw));
+  const sortedWarnings = [...warnings].sort((a, b) =>
+    cmp(a.code, b.code) || cmp(a.file, b.file) || cmp(a.message, b.message));
 
   const byType: Record<string, number> = {};
   for (const n of sortedNodes) byType[n.type] = (byType[n.type] ?? 0) + 1;
@@ -273,7 +299,7 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
     nodes: sortedNodes,
     edges: sortedEdges,
     unresolved: sortedUnresolved,
-    warnings,
+    warnings: sortedWarnings,
     cycles,
     duplicates,
   };
@@ -281,20 +307,33 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
   return graph;
 }
 
+function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+
 /**
- * Drop references that land on the same target, relation *and* line. One
+ * Collapse references that land on the same target, relation *and* line. One
  * source line can legitimately yield several refs to one file — `from pkg
  * import a, b` is the common case — and they'd otherwise show up as parallel
- * edges the viewer draws on top of each other.
+ * edges the viewer draws on top of each other. Their imported `names` are
+ * merged, so `a` and `b` both still count as used.
  */
 function dedupeEdges(list: GraphEdge[]): GraphEdge[] {
-  const seen = new Set<string>();
-  return list.filter(e => {
+  const byKey = new Map<string, GraphEdge>();
+  for (const e of list) {
     const key = `${e.to}\0${e.rel}\0${e.line}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+    const first = byKey.get(key);
+    if (!first) { byKey.set(key, e); continue; }
+    let names: string[] | undefined;
+    if (first.names && e.names) {
+      names = first.names.includes('*') || e.names.includes('*') ? ['*'] : [...new Set([...first.names, ...e.names])];
+    }
+    // Either side not saying what it binds makes the merged edge opaque too.
+    const { names: _drop, ...rest } = first;
+    byKey.set(key, names ? { ...rest, names } : rest);
+  }
+  return [...byKey.values()];
 }
 
 /**

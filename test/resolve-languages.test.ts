@@ -169,7 +169,7 @@ function polyCtx(files: string[], extra: Record<string, unknown> = {}) {
 }
 
 test('go: own-module imports resolve to a package file, others stay external', () => {
-  const c = polyCtx(['internal/store/store.go', 'internal/store/query.go', 'main.go'], { goModule: 'example.com/m' });
+  const c = polyCtx(['internal/store/store.go', 'internal/store/query.go', 'main.go'], { goModules: [{ dir: '', module: 'example.com/m' }] });
   const refs = (t: string): RawRef[] => [{ rel: 'go_import', target: t, line: 1, raw: '', literal: true }];
 
   assert.equal(resolveRefs('main.go', refs('example.com/m/internal/store'), c).edges[0].to, 'internal/store/store.go');

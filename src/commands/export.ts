@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { readGraph } from '../graph/io.ts';
 import type { Graph } from '../graph/types.ts';
+import { buildAdjacency, lookupNode, neighborhood, reportLookupFailure } from './query.ts';
 
 // A screenshot answers "what does it look like"; a text export answers "what
 // did this look like at commit X" — it lives in the README, the ADR or the PR
@@ -34,11 +35,13 @@ export async function runExport(args: ExportArgs): Promise<number> {
 
   let ids: Set<string>;
   if (args.focus) {
-    if (!graph.nodes.some(n => n.id === args.focus)) {
-      console.error(`error: ${args.focus} is not in the graph`);
-      return 5;
+    // Same lookup as `nerve query`: short names work, ambiguity is an error.
+    const found = lookupNode(graph, args.focus, graphPath);
+    if (!found.node) {
+      reportLookupFailure(found);
+      return found.candidates.length ? 2 : 5;
     }
-    ids = subgraph(graph, args.focus, args.depth ?? 1);
+    ids = subgraph(graph, found.node.id, args.depth ?? 1);
   } else {
     ids = new Set(graph.nodes.map(n => n.id));
   }
@@ -59,29 +62,20 @@ export async function runExport(args: ExportArgs): Promise<number> {
 
 /** Everything within `depth` hops of `id`, in either direction. */
 export function subgraph(graph: Graph, id: string, depth: number): Set<string> {
-  const seen = new Set([id]);
-  let frontier = [id];
-  for (let d = 0; d < depth; d++) {
-    const next: string[] = [];
-    for (const e of graph.edges) {
-      if (frontier.includes(e.from) && !seen.has(e.to)) { seen.add(e.to); next.push(e.to); }
-      if (frontier.includes(e.to) && !seen.has(e.from)) { seen.add(e.from); next.push(e.from); }
-    }
-    frontier = next;
-    if (!next.length) break;
-  }
-  return seen;
+  return neighborhood(buildAdjacency(graph), id, depth);
 }
 
 export function toMermaid(graph: Graph, ids: Set<string>): string {
   const alias = new Map<string, string>();
   let i = 0;
   const lines = ['graph LR'];
+  // A label cannot span lines, and a `"` would close the quoted label early.
+  const label = (s: string) => s.replace(/[\r\n]+/g, ' ').replace(/"/g, "'");
   for (const n of graph.nodes) {
     if (!ids.has(n.id)) continue;
     const key = `n${i++}`;
     alias.set(n.id, key);
-    lines.push(`  ${key}["${n.id.replace(/"/g, "'")}"]`);
+    lines.push(`  ${key}["${label(n.id)}"]`);
   }
   for (const e of graph.edges) {
     const from = alias.get(e.from), to = alias.get(e.to);
@@ -91,7 +85,9 @@ export function toMermaid(graph: Graph, ids: Set<string>): string {
 }
 
 export function toDot(graph: Graph, ids: Set<string>): string {
-  const quote = (s: string) => `"${s.replace(/"/g, '\\"')}"`;
+  // Backslashes first, or the one added in front of `"` would be doubled too.
+  const quote = (s: string) =>
+    `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r\n|\r|\n/g, '\\n')}"`;
   const lines = ['digraph nervegraph {', '  rankdir=LR;', '  node [shape=box, fontname="monospace"];'];
   for (const n of graph.nodes) {
     if (!ids.has(n.id)) continue;

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 // Non-relative import specifiers that are *not* npm packages: tsconfig `paths`,
@@ -36,10 +36,31 @@ export function expandAlias(spec: string, rules: AliasRule[]): string[] {
 
 /** The `module` line of go.mod: the import-path prefix of the repo's own packages. */
 export function loadGoModule(root: string): string | undefined {
-  const file = path.join(root, 'go.mod');
-  if (!existsSync(file)) return undefined;
-  const m = /^\s*module\s+(\S+)/m.exec(readFileSync(file, 'utf8'));
-  return m?.[1];
+  return loadGoModules(root, ['go.mod'])[0]?.module;
+}
+
+export interface GoModule {
+  /** Project-relative directory holding the go.mod ('' for the root). */
+  dir: string;
+  /** Its `module` path. */
+  module: string;
+}
+
+/**
+ * Every go.mod among `ids` — a multi-module repo has one per module, not
+ * necessarily at the root — deepest directory first, so the first one whose
+ * directory contains a file is that file's nearest module.
+ */
+export function loadGoModules(root: string, ids: Iterable<string>): GoModule[] {
+  const out: GoModule[] = [];
+  for (const id of ids) {
+    if (id !== 'go.mod' && !id.endsWith('/go.mod')) continue;
+    const file = path.join(root, id);
+    if (!existsSync(file)) continue;
+    const m = /^\s*module\s+(\S+)/m.exec(readFileSync(file, 'utf8'));
+    if (m) out.push({ dir: id.slice(0, -'go.mod'.length).replace(/\/$/, ''), module: m[1] });
+  }
+  return out.sort((a, b) => b.dir.length - a.dir.length || (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
 }
 
 /** composer.json's PSR-4/PSR-0 autoload map, as alias rules over '/'-joined names. */
@@ -53,10 +74,13 @@ export function loadPsr4(root: string): AliasRule[] {
       const map = block?.[std];
       if (!map || typeof map !== 'object') continue;
       for (const [ns, dirs] of Object.entries(map)) {
+        const nsPath = ns.replace(/\\/g, '/');
+        // PSR-4 maps the namespace prefix *onto* the directory; PSR-0 keeps the
+        // full namespace path under it: Acme\Util\Str -> src/Acme/Util/Str.php.
         const targets = (Array.isArray(dirs) ? dirs : [dirs])
           .filter((d): d is string => typeof d === 'string')
-          .map(d => `${stripDot(d)}/*`);
-        if (targets.length) rules.push({ prefix: `${ns.replace(/\\/g, '/')}*`, targets });
+          .map(d => joinRel(stripDot(d), std === 'psr-0' ? `${nsPath}*` : '*'));
+        if (targets.length) rules.push({ prefix: `${nsPath}*`, targets });
       }
     }
   }
@@ -73,36 +97,107 @@ export function loadAliases(root: string): AliasRule[] {
 
 // ── tsconfig / jsconfig ────────────────────────────────────────────────────
 
-// ponytail: `extends` chains are not followed, and only a root-level config is
-// read. Per-package configs in a monorepo would need a config per directory —
-// add that when a real repo needs it; the workspace rules below already cover
-// the common cross-package case.
+// ponytail: only a root-level config is read. Per-package configs in a
+// monorepo would need a config per directory — add that when a real repo
+// needs it; the workspace rules below already cover the common cross-package
+// case.
 function fromTsconfig(root: string): AliasRule[] {
   for (const name of ['tsconfig.json', 'jsconfig.json']) {
     const file = path.join(root, name);
     if (!existsSync(file)) continue;
-    const cfg = parseJsonc(readFileSync(file, 'utf8'));
-    const co = cfg?.compilerOptions;
-    if (!co) continue;
-    const baseUrl = typeof co.baseUrl === 'string' ? stripDot(co.baseUrl) : '';
+    const opts = readTsconfigChain(file, root, new Set());
+    if (!opts) continue;
+    // baseUrl is relative to the config that set it; `paths` targets are
+    // relative to baseUrl, or to the config that set `paths` when there is none.
+    const baseUrl = opts.baseUrl !== undefined ? projectRel(root, opts.baseUrl) : undefined;
+    const pathsBase = baseUrl ?? (opts.pathsDir !== undefined ? projectRel(root, opts.pathsDir) : '');
     const rules: AliasRule[] = [];
-    if (co.paths && typeof co.paths === 'object') {
-      for (const [prefix, targets] of Object.entries(co.paths)) {
+    if (opts.paths) {
+      for (const [prefix, targets] of Object.entries(opts.paths)) {
         if (!Array.isArray(targets)) continue;
         rules.push({
           prefix,
           targets: targets
             .filter((t): t is string => typeof t === 'string')
-            .map(t => joinRel(baseUrl, stripDot(t))),
+            .map(t => joinRel(pathsBase, stripDot(t))),
         });
       }
+      // TypeScript uses the most specific pattern: an exact key first, then
+      // the wildcard with the longest prefix — not declaration order.
+      rules.sort((a, b) => specificity(b.prefix) - specificity(a.prefix));
     }
     // baseUrl alone makes every bare specifier resolvable as baseUrl/<spec>.
     // Last, so an explicit `paths` entry wins.
-    if (baseUrl) rules.push({ prefix: '*', targets: [joinRel(baseUrl, '*')] });
+    if (baseUrl !== undefined) rules.push({ prefix: '*', targets: [joinRel(baseUrl, '*')] });
     return rules;
   }
   return [];
+}
+
+function specificity(prefix: string): number {
+  return prefix.endsWith('*') ? prefix.length - 1 : Number.MAX_SAFE_INTEGER;
+}
+
+interface TsOptions {
+  /** Absolute directory baseUrl points at. */
+  baseUrl?: string;
+  paths?: Record<string, unknown>;
+  /** Absolute directory of the config that declared `paths`. */
+  pathsDir?: string;
+}
+
+/**
+ * compilerOptions of `file` merged over everything it `extends` (a relative
+ * path, a package name, or an array of either); the child wins per option.
+ * Undefined when neither the config nor its parents have compilerOptions.
+ */
+function readTsconfigChain(file: string, root: string, seen: Set<string>): TsOptions | undefined {
+  if (seen.has(file) || !existsSync(file)) return undefined;
+  seen.add(file);
+  const cfg = parseJsonc(readFileSync(file, 'utf8'));
+  if (!cfg || typeof cfg !== 'object') return undefined;
+  const dir = path.dirname(file);
+  let merged: TsOptions | undefined;
+  const parents = Array.isArray(cfg.extends) ? cfg.extends : cfg.extends !== undefined ? [cfg.extends] : [];
+  for (const ext of parents) {
+    if (typeof ext !== 'string') continue;
+    const parentFile = resolveExtends(ext, dir, root);
+    const parent = parentFile && readTsconfigChain(parentFile, root, seen);
+    if (parent) merged = { ...merged, ...parent };
+  }
+  const co = cfg.compilerOptions;
+  if (co && typeof co === 'object') {
+    merged ??= {};
+    if (typeof co.baseUrl === 'string') merged.baseUrl = path.resolve(dir, co.baseUrl);
+    if (co.paths && typeof co.paths === 'object') {
+      merged.paths = co.paths;
+      merged.pathsDir = dir;
+    }
+  }
+  return merged;
+}
+
+function resolveExtends(spec: string, fromDir: string, root: string): string | undefined {
+  const withJson = (p: string) => [p, `${p}.json`, path.join(p, 'tsconfig.json')];
+  if (spec.startsWith('.') || path.isAbsolute(spec)) {
+    return withJson(path.resolve(fromDir, spec)).find(isFile);
+  }
+  // A package name ("@tsconfig/node20/tsconfig.json"): node_modules lookup,
+  // walking up from the config, never above the project root.
+  for (let dir = fromDir; ; dir = path.dirname(dir)) {
+    const hit = withJson(path.join(dir, 'node_modules', spec)).find(isFile);
+    if (hit) return hit;
+    if (path.relative(root, dir) === '' || path.dirname(dir) === dir) return undefined;
+  }
+}
+
+function isFile(p: string): boolean {
+  try { return statSync(p).isFile(); } catch { return false; }
+}
+
+/** Absolute path -> project-relative posix path ('' for the root itself). */
+function projectRel(root: string, abs: string): string {
+  return path.relative(root, abs).split(path.sep).join('/');
 }
 
 // ── package.json "imports" ─────────────────────────────────────────────────
@@ -119,11 +214,22 @@ function fromPackageImports(root: string): AliasRule[] {
   return rules;
 }
 
+// Conditions tried first: the ESM entry, then the generic one, then `types`
+// (in a monorepo it often points at the .ts source while `import` points at
+// an unbuilt dist/). Any other condition follows in declaration order.
+const PREFERRED_CONDITIONS = ['import', 'module', 'default', 'types'];
+
 /** `"#x": "./a.js"` or `"#x": { "import": "./a.js", "default": "./b.cjs" }`. */
 function conditionTargets(value: unknown): string[] {
   if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(conditionTargets);
   if (value && typeof value === 'object') {
-    return Object.values(value as Record<string, unknown>).flatMap(conditionTargets);
+    const obj = value as Record<string, unknown>;
+    const keys = [
+      ...PREFERRED_CONDITIONS.filter(k => k in obj),
+      ...Object.keys(obj).filter(k => !PREFERRED_CONDITIONS.includes(k)),
+    ];
+    return keys.flatMap(k => conditionTargets(obj[k]));
   }
   return [];
 }
@@ -139,9 +245,28 @@ function fromWorkspaces(root: string): AliasRule[] {
   for (const dir of patterns.flatMap(p => expandWorkspacePattern(root, p))) {
     const sub = readJson(path.join(root, dir, 'package.json'));
     if (typeof sub?.name !== 'string') continue;
-    // The package's own entry file is found by the usual extension/index chain
-    // once the resolver has the directory, so pointing at the directory is enough.
-    rules.push({ prefix: sub.name, targets: [dir] });
+    const inPkg = (t: string) => joinRel(dir, stripDot(t));
+    // `exports` subpaths ("./button", "./utils/*") come first, as their own
+    // rules, so "@app/ui/button" goes where the package says it does.
+    const entry: string[] = [];
+    const exp = sub.exports;
+    const isSubpathMap = exp && typeof exp === 'object' && !Array.isArray(exp)
+      && Object.keys(exp).some(k => k.startsWith('.'));
+    if (isSubpathMap) {
+      for (const [key, value] of Object.entries(exp as Record<string, unknown>)) {
+        const targets = conditionTargets(value).map(inPkg);
+        if (key === '.') entry.push(...targets);
+        else if (key.startsWith('./') && targets.length) rules.push({ prefix: `${sub.name}/${key.slice(2)}`, targets });
+      }
+    } else if (exp !== undefined) {
+      entry.push(...conditionTargets(exp).map(inPkg)); // "exports": "./x.js" or { import, default }
+    }
+    for (const field of ['module', 'main']) {
+      if (typeof sub[field] === 'string') entry.push(inPkg(sub[field]));
+    }
+    // The directory last: the usual extension/index chain finds index.* there,
+    // and expandAlias maps any other subpath ("@app/ui/button") under it.
+    rules.push({ prefix: sub.name, targets: [...entry, dir] });
   }
   return rules;
 }

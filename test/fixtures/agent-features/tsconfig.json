@@ -1,0 +1,4 @@
+{
+  // outDir/rootDir map the bin back to its source
+  "compilerOptions": { "outDir": "dist", "rootDir": "src" }
+}

@@ -3,15 +3,36 @@ import { normalizeJoin, stripMinSuffix } from './path-utils.ts';
 import { expandAlias } from '../../scan/aliases.ts';
 
 const JS_EXT_CHAIN = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts', '.vue', '.svelte', '.astro', '.json'];
-const JS_INDEX_CHAIN = ['/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/index.mjs'];
+const JS_INDEX_CHAIN = ['index.ts', 'index.tsx', 'index.js', 'index.jsx', 'index.mjs'];
+
+// TypeScript's ESM convention: source says `./util.js`, the file on disk is
+// `util.ts`. Tried only when the spelled file itself doesn't exist.
+const TS_SOURCE_EXT: Record<string, string[]> = {
+  '.js': ['.ts', '.tsx'],
+  '.jsx': ['.tsx'],
+  '.mjs': ['.mts'],
+  '.cjs': ['.cts'],
+};
 
 /** The extension-chain / directory-index lookup, shared by path and alias resolution. */
 function jsCandidate(base: string, ctx: ResolveContext): string | undefined {
-  for (const ext of JS_EXT_CHAIN) {
-    if (ctx.fileExists(base + ext)) return base + ext;
+  // `import './'` / `import '.'` name a directory: go straight to its index.
+  const dir = base.replace(/\/+$/, '');
+  const isDir = dir !== base || base === '' || base === '.';
+  if (!isDir) {
+    if (ctx.fileExists(base)) return base;
+    const ext = /\.[cm]?jsx?$/.exec(base)?.[0];
+    for (const swap of ext ? TS_SOURCE_EXT[ext] ?? [] : []) {
+      const candidate = base.slice(0, -ext!.length) + swap;
+      if (ctx.fileExists(candidate)) return candidate;
+    }
+    for (const ext of JS_EXT_CHAIN) {
+      if (ctx.fileExists(base + ext)) return base + ext;
+    }
   }
+  const prefix = dir === '' || dir === '.' ? '' : `${dir}/`;
   for (const idx of JS_INDEX_CHAIN) {
-    if (ctx.fileExists(base + idx)) return base + idx;
+    if (ctx.fileExists(prefix + idx)) return prefix + idx;
   }
   const original = stripMinSuffix(base);
   if (original && ctx.fileExists(original)) return original;

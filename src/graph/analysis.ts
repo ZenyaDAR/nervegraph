@@ -1,10 +1,109 @@
-import type { Graph, GraphNode, GraphEdge } from './types.ts';
+import path from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import type { Graph, GraphNode, GraphEdge, Risk, UnresolvedRef } from './types.ts';
+import { hotThreshold } from '../scan/git.ts';
+import { parseJsonc } from '../scan/aliases.ts';
 
 // Derived facts that answer "what is wrong here", as opposed to build.ts's
 // "how is this connected". Everything below reads the finished node/edge set;
-// nothing here touches the filesystem.
+// only refineGraph() reads the filesystem (package.json and tsconfig.json).
 
 const MODULE_RELS = new Set(['import', 'require', 'dynamic_import']);
+
+// --- what kind of file is this ------------------------------------------------
+
+const FIXTURE_PATH = /(^|\/)(fixtures?|__fixtures__|__mocks__|__snapshots__|testdata|test-data)\//i;
+const TEST_PATH = /(^|\/)(tests?|__tests__|specs?)\/|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$|_test\.(go|py)$|_spec\.rb$|(Tests?|IT)\.(java|kt|cs)$/;
+const DOC_PATH = /\.(md|mdx|markdown|rst|txt|adoc)$|(^|\/)(docs?|documentation)\/|(^|\/)(README|LICENSE|LICENCE|CHANGELOG|CONTRIBUTING|AUTHORS|NOTICE|SECURITY|CODE_OF_CONDUCT)(\.[^/]*)?$/i;
+const ASSET_PATH = /\.(png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|mov|mp3|wav|ogg|pdf|zip)$/i;
+const CONFIG_PATH = /(^|\/)\.[^/]+$|\.(json|jsonc|json5|ya?ml|toml|ini|cfg|conf|lock|env|properties)$|(^|\/)[^/]+\.config\.[^/]+$|(^|\/)(Dockerfile|Makefile|Procfile|Gemfile|Rakefile|go\.sum)$|(^|\/)config\//i;
+const ENTRY_PATH = /(^|\/)(bin|scripts?|cmd|tools|examples?)\/|(^|\/)(cli|server|app|main|index|run|manage|setup|start|worker|bootstrap)\.[^./]+$/;
+
+/** A test file (not a fixture a test reads): `test/`, `*.test.*`, `test_*.py`, `*_test.go`, `*_spec.rb`, … */
+export function isTestFile(id: string): boolean {
+  return !FIXTURE_PATH.test(id) && TEST_PATH.test(id);
+}
+
+export type FileKind = 'test' | 'fixture' | 'doc' | 'asset' | 'config' | 'entry' | 'code';
+export const FILE_KINDS: FileKind[] = ['code', 'entry', 'test', 'fixture', 'doc', 'config', 'asset'];
+
+/**
+ * Why a file might be unreferenced. Only `code` is a real deletion candidate;
+ * the rest are entered from outside the import graph (a test runner, a reader,
+ * a tool's config loader, a shell) or are data.
+ */
+export function fileKind(id: string): FileKind {
+  if (FIXTURE_PATH.test(id)) return 'fixture';
+  if (TEST_PATH.test(id)) return 'test';
+  if (DOC_PATH.test(id)) return 'doc';
+  if (ASSET_PATH.test(id)) return 'asset';
+  if (CONFIG_PATH.test(id)) return 'config';
+  if (ENTRY_PATH.test(id)) return 'entry';
+  return 'code';
+}
+
+/** An unresolved reference that points outside the project on purpose: a package, a builtin, a URL. */
+export function isExternal(u: UnresolvedRef): boolean {
+  return u.reason === 'external';
+}
+
+// --- risk, entrypoints, orphans ----------------------------------------------
+
+/**
+ * Risk is about what breaks when the file changes, so it follows dependents.
+ * A file everything depends on is risky; one that also changes every week is
+ * riskier still (churn promotes one step, and only for a file with
+ * dependents). Docs and media never break a build. An entrypoint with no
+ * dependents is only as risky as what it pulls in: medium when it imports
+ * something, low when it is a leaf such as a locale file.
+ */
+export function riskFor(n: GraphNode, hot: boolean): Risk {
+  const kind = fileKind(n.id);
+  if (kind === 'doc' || kind === 'asset') return 'low';
+  if (n.in >= 10) return 'high';
+  if (n.in >= 3) return hot ? 'high' : 'medium';
+  if (n.in >= 1) return hot ? 'medium' : 'low';
+  return n.entrypoint && n.out > 0 ? 'medium' : 'low';
+}
+
+/**
+ * Files package.json declares as entry points (`main`, `module`, `bin`,
+ * `exports`). A path under tsconfig's `outDir` is mapped back to its source
+ * under `rootDir`, so `bin: dist/cli.js` marks `src/cli.ts`.
+ */
+export function packageEntrypoints(root: string): Set<string> {
+  const ids = new Set<string>();
+  const pkg = readJson(path.join(root, 'package.json'));
+  if (!pkg) return ids;
+
+  const targets: string[] = [];
+  const collect = (v: unknown): void => {
+    if (typeof v === 'string') targets.push(v);
+    else if (v && typeof v === 'object') for (const x of Object.values(v)) collect(x);
+  };
+  for (const key of ['main', 'module', 'bin', 'exports']) collect(pkg[key]);
+
+  const ts = readJson(path.join(root, 'tsconfig.json'))?.compilerOptions ?? {};
+  const strip = (p: unknown) => typeof p === 'string' ? p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '') : undefined;
+  const outDir = strip(ts.outDir);
+  const rootDir = strip(ts.rootDir) ?? 'src';
+
+  for (const t of targets) {
+    const id = strip(t)!;
+    ids.add(id);
+    if (outDir && id.startsWith(outDir + '/')) {
+      const src = (rootDir && rootDir !== '.' ? rootDir + '/' : '') + id.slice(outDir.length + 1);
+      const stem = src.replace(/\.(c|m)?js$/, '');
+      for (const ext of ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']) ids.add(stem + ext);
+    }
+  }
+  return ids;
+}
+
+function readJson(file: string): any {
+  if (!existsSync(file)) return undefined;
+  try { return parseJsonc(readFileSync(file, 'utf8')); } catch { return undefined; }
+}
 
 /**
  * Fill in `deadExports`: the exports of a file that no importer ever names.

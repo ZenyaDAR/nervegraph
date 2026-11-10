@@ -1,6 +1,6 @@
 import type { RelType } from '../types.ts';
 import type { Profile } from '../../scan/profile.ts';
-import type { AliasRule } from '../../scan/aliases.ts';
+import type { AliasRule, GoModule } from '../../scan/aliases.ts';
 
 export interface ResolveContext {
   profile: Profile;
@@ -10,8 +10,8 @@ export interface ResolveContext {
   aliases?: AliasRule[];
   /** composer.json's PSR-4 autoload map, for PHP `use` statements. */
   psr4?: AliasRule[];
-  /** The `module` path from go.mod, for telling own packages from vendored ones. */
-  goModule?: string;
+  /** Every go.mod in the repo, deepest dir first, for telling own packages from third-party ones. */
+  goModules?: GoModule[];
   /** Files directly inside a directory. Needed where an import names a
    *  directory rather than a file (a Go package, a Terraform module). */
   listDir?: (dir: string) => string[];

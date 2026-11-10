@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { readGraph } from '../graph/io.ts';
+import { prevGraphPath, readGraph } from '../graph/io.ts';
 import type { Graph } from '../graph/types.ts';
 
 // What changed between two scans. The graph is deterministic, so committing
@@ -64,15 +64,13 @@ export function diffGraphs(before: Graph, after: Graph): GraphDiff {
 }
 
 export async function runDiff(args: DiffArgs): Promise<number> {
-  const beforePath = args.before ? path.resolve(args.before) : undefined;
   const afterPath = path.resolve(args.after ?? '.nervegraph/graph.json');
-  if (!beforePath) {
-    console.error('error: nerve diff <before.json> [after.json]');
-    return 2;
-  }
+  // No arguments: what the last re-scan changed (scan keeps the one before it).
+  const beforePath = args.before ? path.resolve(args.before) : prevGraphPath(afterPath);
   for (const p of [beforePath, afterPath]) {
     if (!existsSync(p)) {
       console.error(`error: graph not found at ${p}`);
+      if (!args.before && p === beforePath) console.error('no previous scan yet: run nerve scan again after a change, or pass two graphs');
       return 5;
     }
   }
@@ -80,7 +78,7 @@ export async function runDiff(args: DiffArgs): Promise<number> {
   const diff = diffGraphs(await readGraph(beforePath), await readGraph(afterPath));
 
   if (args.json) {
-    console.log(JSON.stringify(diff, null, 2));
+    console.log(JSON.stringify(diff));
     return 0;
   }
 

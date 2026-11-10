@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { RelResolver, ResolveContext, ResolvedTarget } from './types.ts';
 import { normalizeJoin } from './path-utils.ts';
 import { expandAlias } from '../../scan/aliases.ts';
@@ -31,9 +32,22 @@ function pyCandidates(base: string): string[] {
   return [`${base}.py`, `${base}/__init__.py`, `${base}.pyi`];
 }
 
+// Every ancestor directory of the importing file, nearest first: a package
+// living in backend/app/ is importable as `app` by the code next to it (the
+// interpreter's sys.path[0] is the script's directory, and test runners add
+// the project subdirectory too), so those are roots as well.
+function ancestorRoots(fromDir: string): string[] {
+  const roots: string[] = [];
+  for (let dir = fromDir === '.' ? '' : fromDir; dir; dir = dropLastSegment(dir) ?? '') roots.push(`${dir}/`);
+  return roots;
+}
+
 export function resolvePythonImport(target: string, fromDir: string, ctx: ResolveContext): ResolvedTarget {
   const dots = /^\.+/.exec(target)?.[0].length ?? 0;
   const bases: string[] = [];
+  // Bases whose module path has more than one segment, i.e. whose parent is
+  // still a package inside the root and not the root directory itself.
+  const parents: string[] = [];
 
   if (dots > 0) {
     // `from . import x` is the current package; each extra dot climbs one level.
@@ -42,9 +56,15 @@ export function resolvePythonImport(target: string, fromDir: string, ctx: Resolv
     const base = normalizeJoin(fromDir, [up, rest].filter(Boolean).join('/') || '.');
     if (base.startsWith('..')) return 'external';
     bases.push(base);
+    const parent = dropLastSegment(base);
+    if (parent) parents.push(parent);
   } else {
     const rel = target.replace(/\./g, '/');
-    for (const root of PY_ROOTS) bases.push(`${root}${rel}`);
+    const relParent = dropLastSegment(rel);
+    for (const root of new Set([...PY_ROOTS, ...ancestorRoots(fromDir)])) {
+      bases.push(`${root}${rel}`);
+      if (relParent) parents.push(`${root}${relParent}`);
+    }
   }
 
   const exact = firstExisting(bases.flatMap(pyCandidates), ctx);
@@ -52,12 +72,17 @@ export function resolvePythonImport(target: string, fromDir: string, ctx: Resolv
 
   // `from pkg import name`: the scanner can't tell a submodule from a name
   // defined in pkg/__init__.py, so fall back to the package itself.
-  const parents = bases.map(dropLastSegment).filter((p): p is string => !!p);
   const parent = firstExisting(parents.flatMap(pyCandidates), ctx);
   if (parent) return { id: parent, missing: false };
 
   // Relative imports must be project files, so an unfound one is a real break.
-  if (dots > 0) return { id: `${bases[0]}.py`, missing: true };
+  // `from .models import User, Group` arrives as `.models.User` and
+  // `.models.Group`: the module that is missing is models, not one per name.
+  if (dots > 0) {
+    const rest = target.slice(dots);
+    const missing = rest.includes('.') ? dropLastSegment(bases[0])! : bases[0];
+    return { id: `${missing}.py`, missing: true };
+  }
   return 'external';
 }
 
@@ -112,12 +137,16 @@ function packageFile(dir: string, ext: string, ctx: ResolveContext): string | un
   return files.find(f => f === `${dir}/${name}${ext}`) ?? [...files].sort()[0];
 }
 
-export function resolveGoImport(target: string, _fromDir: string, ctx: ResolveContext): ResolvedTarget {
-  const mod = ctx.goModule;
-  // Without go.mod every import looks third-party; with it, only the repo's own
-  // module prefix is a project file. "fmt" and "github.com/x/y" stay external.
-  if (!mod || (target !== mod && !target.startsWith(`${mod}/`))) return 'external';
-  const dir = target === mod ? '' : target.slice(mod.length + 1);
+export function resolveGoImport(target: string, fromDir: string, ctx: ResolveContext): ResolvedTarget {
+  // Without go.mod every import looks third-party; with it, only a repo
+  // module's prefix is a project file. "fmt" and "github.com/x/y" stay external.
+  // The importing file's own (nearest) module is tried first; modules are deepest-first.
+  const mods = ctx.goModules ?? [];
+  const inMod = (d: string) => d === '' || fromDir === d || fromDir.startsWith(`${d}/`);
+  const mod = [...mods.filter(m => inMod(m.dir)), ...mods.filter(m => !inMod(m.dir))]
+    .find(m => target === m.module || target.startsWith(`${m.module}/`));
+  if (!mod) return 'external';
+  const dir = [mod.dir, target.slice(mod.module.length + 1)].filter(Boolean).join('/');
   const hit = packageFile(dir, '.go', ctx);
   if (hit) return { id: hit, missing: false };
   const name = dir.slice(dir.lastIndexOf('/') + 1) || 'main';
@@ -166,7 +195,8 @@ const C_ROOTS = ['include/', 'src/', 'lib/', ''];
 export function resolveCInclude(target: string, fromDir: string, ctx: ResolveContext): ResolvedTarget {
   const local = normalizeJoin(fromDir, target);
   if (!local.startsWith('..') && ctx.fileExists(local)) return { id: local, missing: false };
-  const hit = firstExisting(C_ROOTS.map(root => `${root}${target}`), ctx);
+  // `include/` + `./x.h` must be looked up as include/x.h, not include/./x.h.
+  const hit = firstExisting(C_ROOTS.map(root => path.posix.normalize(`${root}${target}`)), ctx);
   if (hit) return { id: hit, missing: false };
   return { id: local.startsWith('..') ? target : local, missing: true };
 }

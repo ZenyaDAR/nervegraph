@@ -587,12 +587,20 @@
     return neighborCache.value;
   }
 
+  function nodeTooltip(n) {
+    const el = document.createElement('span');
+    el.textContent = n.id;
+    return el;
+  }
+
   function buildGraphInstance() {
     const el = document.getElementById('graph');
     fg = ForceGraph()(el)
       .graphData(buildGraphData())
       .nodeId('id')
-      .nodeLabel(n => n.id)
+      // force-graph renders a string label as HTML, and ids come from import
+      // strings in the scanned code; an element with textContent cannot inject.
+      .nodeLabel(nodeTooltip)
       .nodeCanvasObjectMode(() => 'replace')
       .nodeCanvasObject(drawNode)
       .nodePointerAreaPaint(paintNodePointerArea)
@@ -845,7 +853,7 @@
   function renderDetails(id) {
     const n = state.nodesById.get(id);
     const body = document.getElementById('details-body');
-    if (!n) { body.innerHTML = ''; return; }
+    if (!n) { body.replaceChildren(); return; }
 
     const usedBy = state.graph.edges.filter(e => e.to === id);
     const uses = state.graph.edges.filter(e => e.from === id);
@@ -889,7 +897,6 @@
     } else {
       const riskBox = document.createElement('div');
       riskBox.className = `risk-box ${n.risk}`;
-      riskBox.innerHTML = '';
       const left = document.createElement('span');
       left.textContent = `RISK ${n.risk.toUpperCase()}`;
       const right = document.createElement('span');

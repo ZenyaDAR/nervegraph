@@ -2,6 +2,7 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { readGraph } from '../graph/io.ts';
+import { fileKind, isExternal } from '../graph/analysis.ts';
 import type { Graph } from '../graph/types.ts';
 
 // The gate. `scan` and `view` answer "how is this connected"; `check` turns the
@@ -56,6 +57,22 @@ export function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${out}$`);
 }
 
+/** Why a parsed rules file is unusable, or undefined when it is fine. */
+export function validateRules(rules: unknown): string | undefined {
+  if (!Array.isArray(rules)) return 'rules must be a JSON array';
+  for (const [i, rule] of rules.entries()) {
+    const at = `rule #${i + 1}`;
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return `${at} must be an object`;
+    const r = rule as Record<string, unknown>;
+    if (typeof r.from !== 'string' || !r.from) return `${at}: "from" must be a non-empty glob string`;
+    if (r.deny === undefined && r.allow === undefined) return `${at}: needs "deny" or "allow"`;
+    for (const key of ['deny', 'allow', 'name']) {
+      if (r[key] !== undefined && typeof r[key] !== 'string') return `${at}: "${key}" must be a string`;
+    }
+  }
+  return undefined;
+}
+
 export function checkRules(graph: Graph, rules: LayerRule[]): Violation[] {
   const out: Violation[] = [];
   for (const rule of rules) {
@@ -101,14 +118,20 @@ export async function runCheck(args: CheckArgs): Promise<number> {
   // the file exists; an explicit --rules that is missing is an error.
   const rulesPath = args.rules ? path.resolve(args.rules) : path.join(path.dirname(graphPath), 'rules.json');
   if (existsSync(rulesPath)) {
-    let rules: LayerRule[];
+    let rules: unknown;
     try {
       rules = JSON.parse(await readFile(rulesPath, 'utf8'));
     } catch (e: any) {
       console.error(`error: could not read ${rulesPath}: ${e?.message ?? e}`);
       return 2;
     }
-    violations.push(...checkRules(graph, rules));
+    const problem = validateRules(rules);
+    if (problem) {
+      console.error(`error: ${rulesPath}: ${problem}`);
+      console.error('expected: [{ "name"?: string, "from": "<glob>", "deny": "<glob>" | "allow": "<glob>" }]');
+      return 2;
+    }
+    violations.push(...checkRules(graph, rules as LayerRule[]));
   } else if (args.rules) {
     console.error(`error: rules file not found at ${rulesPath}`);
     return 2;
@@ -149,14 +172,17 @@ export function collectViolations(graph: Graph, args: CheckArgs): Violation[] {
     add('cycles', cycles.length, args.maxCycles, cycles.map(c => c.join(' -> ')));
   }
 
-  if (args.maxUnresolved !== undefined && graph.stats.unresolved > args.maxUnresolved) {
-    add('unresolved references', graph.stats.unresolved, args.maxUnresolved,
-      graph.unresolved.map(u => `${u.from}:${u.line}  ${u.raw}`));
+  // npm packages, builtins and URLs are not a broken graph; only count the rest.
+  const unresolved = graph.unresolved.filter(u => !isExternal(u));
+  if (args.maxUnresolved !== undefined && unresolved.length > args.maxUnresolved) {
+    add('unresolved references', unresolved.length, args.maxUnresolved,
+      unresolved.map(u => `${u.from}:${u.line}  ${u.raw}`));
   }
 
-  if (args.maxOrphans !== undefined && graph.stats.orphans > args.maxOrphans) {
-    add('orphan files', graph.stats.orphans, args.maxOrphans,
-      graph.nodes.filter(n => n.orphan).map(n => n.id));
+  // Unreferenced tests, docs and config are expected; only code orphans count.
+  const orphans = graph.nodes.filter(n => n.orphan && fileKind(n.id) === 'code');
+  if (args.maxOrphans !== undefined && orphans.length > args.maxOrphans) {
+    add('orphan code files', orphans.length, args.maxOrphans, orphans.map(n => n.id));
   }
 
   if (args.noDeadExports) {

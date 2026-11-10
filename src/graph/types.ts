@@ -94,7 +94,7 @@ export interface UnresolvedRef {
 }
 
 export interface Warning {
-  code: 'parse_error' | 'file_too_large' | 'read_error' | 'cycle';
+  code: 'parse_error' | 'file_too_large' | 'read_error' | 'cycle' | 'case_mismatch';
   file: string;
   message: string;
 }
