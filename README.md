@@ -1,5 +1,11 @@
 # nervegraph
 
+[![npm version](https://img.shields.io/npm/v/nervegraph)](https://www.npmjs.com/package/nervegraph)
+[![real installs per week](https://img.shields.io/endpoint?url=https%3A%2F%2Fbadge.humanloads.dev%2Fbadge%2Fnervegraph)](https://humanloads.dev/nervegraph)
+[![tests](https://github.com/ZenyaDAR/nervegraph/actions/workflows/test.yml/badge.svg)](https://github.com/ZenyaDAR/nervegraph/actions/workflows/test.yml)
+[![node](https://img.shields.io/node/v/nervegraph)](https://nodejs.org)
+[![license: MIT](https://img.shields.io/npm/l/nervegraph)](LICENSE)
+
 > Obsidian Graph View, but for source code.
 > One command scans the project, another opens an interactive relationship map in the browser.
 >
