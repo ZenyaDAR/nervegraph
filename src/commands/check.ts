@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { readGraph } from '../graph/io.ts';
+import { readGraph, resolveGraphPath } from '../graph/io.ts';
 import { fileKind, isExternal } from '../graph/analysis.ts';
 import type { Graph } from '../graph/types.ts';
 
@@ -105,7 +105,7 @@ export interface Violation {
 }
 
 export async function runCheck(args: CheckArgs): Promise<number> {
-  const graphPath = path.resolve(args.graph ?? '.nervegraph/graph.json');
+  const graphPath = resolveGraphPath(args.graph);
   if (!existsSync(graphPath)) {
     console.error(`error: graph not found at ${graphPath}`);
     console.error('run: nerve scan');

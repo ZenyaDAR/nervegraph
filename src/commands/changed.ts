@@ -1,9 +1,9 @@
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { readGraph } from '../graph/io.ts';
+import { resolveGraphPath } from '../graph/io.ts';
 import type { Graph } from '../graph/types.ts';
 import { isTestFile } from '../graph/analysis.ts';
-import { buildAdjacency, cap, projectRoot, toJson, transitiveDependentIds, DEFAULT_LIMIT } from './query.ts';
+import { buildAdjacency, cap, loadFreshGraph, projectRoot, toJson, transitiveDependentIds, DEFAULT_LIMIT } from './query.ts';
 
 // "I changed these files — what else is affected, and which tests cover it?"
 // Read-only git calls only: status and diff, never anything that writes.
@@ -91,9 +91,9 @@ export function changedReport(graph: Graph, files: string[], opts: { limit?: num
 }
 
 /** `nerve query --changed`. */
-export async function runChanged(args: { graph?: string; base?: string; json?: boolean; pretty?: boolean; limit?: number }): Promise<number> {
-  const graphPath = path.resolve(args.graph ?? '.nervegraph/graph.json');
-  const graph = await readGraph(graphPath);
+export async function runChanged(args: { graph?: string; base?: string; json?: boolean; pretty?: boolean; limit?: number; noAutoscan?: boolean }): Promise<number> {
+  const graphPath = resolveGraphPath(args.graph);
+  const { graph } = await loadFreshGraph(graphPath, !args.noAutoscan);
   const report = changedReport(graph, gitChangedFiles(projectRoot(graph, graphPath), args.base), { limit: args.limit, base: args.base });
   if (args.json) { console.log(toJson(report, args.pretty)); return 0; }
   printChanged(report);

@@ -21,17 +21,19 @@ export function scanShopifyJson(file: { id: string; content: string }): ScannerR
           raw: truncate(`"type": "${sec.type}"`),
           literal: true,
         });
-        blockRefs(sec.blocks, Math.max(index, 0));
+        blockRefs(sec.blocks, Math.max(index, 0), sec.type);
       }
     }
   }
 
   // `sections.*.blocks.*.type`, nested `blocks` included. A type may name a
   // theme block (blocks/<type>.liquid) or a block defined inside the section's
-  // own schema — only the resolver can tell, so these carry value
-  // 'theme_block' and resolve.ts drops the ones with no file behind them.
+  // own schema — so these carry value 'theme_block' and resolve.ts drops the
+  // ones with no file behind them. A top-level block also carries its section
+  // type: build.ts drops it when that section defines the type itself (local
+  // blocks can't nest, so a nested block is always a theme block).
   // `@app`/`@theme` are placeholders and `shopify://apps/...` is an app block.
-  function blockRefs(blocks: unknown, from: number) {
+  function blockRefs(blocks: unknown, from: number, section?: string) {
     if (!blocks || typeof blocks !== 'object') return;
     for (const [key, block] of Object.entries<any>(blocks)) {
       if (!block || typeof block.type !== 'string') continue;
@@ -45,6 +47,7 @@ export function scanShopifyJson(file: { id: string; content: string }): ScannerR
           raw: truncate(`"type": "${type}"`),
           literal: true,
           value: 'theme_block',
+          ...(section ? { section } : {}),
         });
       }
       blockRefs(block.blocks, Math.max(index, from));

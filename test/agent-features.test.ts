@@ -215,6 +215,7 @@ test('overview: one small answer about the layout', () => {
 test('agents-md: a short snippet that warns against reading graph.json whole', () => {
   const { graphPath } = scanned();
   const r = cli(['agents-md', '--graph', graphPath]);
+  assert.doesNotMatch(r.out, /npx nervegraph(?!@latest)/);
   assert.equal(r.code, 0, r.err);
   const lines = r.out.trim().split('\n');
   assert.ok(lines.length >= 10 && lines.length <= 16, `${lines.length} lines`);
@@ -231,7 +232,7 @@ async function mcpCall(graphPath: string, name: string, args: unknown = {}, opts
 }
 
 test('mcp: a small tool list, each answering in one compact line', async () => {
-  assert.deepEqual(TOOLS.map(t => t.name), ['nervegraph_overview', 'nervegraph_query', 'nervegraph_symbol', 'nervegraph_changed', 'nervegraph_list']);
+  assert.deepEqual(TOOLS.map(t => t.name).sort(), ['nervegraph_changed', 'nervegraph_list', 'nervegraph_overview', 'nervegraph_query', 'nervegraph_symbol']);
   const { graphPath } = scanned();
 
   const overview = await mcpCall(graphPath, 'nervegraph_overview');

@@ -47,7 +47,7 @@ function jsCandidate(base: string, ctx: ResolveContext): string | undefined {
 // import) — currently JavaScript/TypeScript, profile-agnostic.
 export function resolveModule(target: string, fromDir: string, ctx: ResolveContext): ResolvedTarget {
   if (!target.startsWith('.') && !target.startsWith('/')) {
-    for (const candidate of expandAlias(target, ctx.aliases ?? [])) {
+    for (const candidate of expandAlias(target, ctx.aliases ?? [], fromDir)) {
       const hit = jsCandidate(candidate, ctx);
       if (hit) return { id: hit, missing: false };
     }

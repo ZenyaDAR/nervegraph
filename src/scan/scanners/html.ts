@@ -79,6 +79,18 @@ export function scanHtml(file: { id: string; content: string }): ScannerResult {
 const INLINE_SCRIPT_RE = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
 const JS_TYPE_RE = /\btype\s*=\s*["']?(?:module|(?:text|application)\/(?:java|ecma)script)["']?/i;
 
+/** Inline `<script>` bodies holding JavaScript, with the 0-based line each starts on. */
+export function inlineScripts(content: string): { body: string; offset: number }[] {
+  const out: { body: string; offset: number }[] = [];
+  for (const m of content.matchAll(INLINE_SCRIPT_RE)) {
+    const attrs = m[1];
+    if (/\bsrc\s*=/i.test(attrs)) continue;
+    if (/\btype\s*=/i.test(attrs) && !JS_TYPE_RE.test(attrs)) continue; // JSON, templates, ...
+    out.push({ body: m[2], offset: lineAt(content, m.index + m[0].indexOf('>') + 1) - 1 });
+  }
+  return out;
+}
+
 /**
  * A standalone .html page: the markup refs plus imports from inline
  * `<script type="module">` (and classic inline scripts, whose `import()` is
@@ -88,12 +100,8 @@ const JS_TYPE_RE = /\btype\s*=\s*["']?(?:module|(?:text|application)\/(?:java|ec
 export function scanHtmlPage(file: { id: string; content: string }): ScannerResult {
   const result = scanHtml(file);
   const content = file.content.replace(COMMENT_RE, blank);
-  for (const m of content.matchAll(INLINE_SCRIPT_RE)) {
-    const attrs = m[1];
-    if (/\bsrc\s*=/i.test(attrs)) continue;
-    if (/\btype\s*=/i.test(attrs) && !JS_TYPE_RE.test(attrs)) continue; // JSON, templates, ...
-    const offset = lineAt(content, m.index + m[0].indexOf('>') + 1) - 1;
-    for (const ref of scanJavaScript({ id: file.id, content: m[2] }).refs) {
+  for (const { body, offset } of inlineScripts(content)) {
+    for (const ref of scanJavaScript({ id: file.id, content: body }).refs) {
       result.refs.push({ ...ref, line: ref.line + offset });
     }
   }

@@ -5,11 +5,12 @@ import { langFor } from '../scan/extensions.ts';
 import { VERSION } from '../version.ts';
 import { findLanguage } from '../scan/languages/index.ts';
 import { loadAliases, loadGoModules, loadPsr4 } from '../scan/aliases.ts';
+import { importMapAliases } from '../scan/importmap.ts';
 import { resolveRefs } from './resolve.ts';
 import { markDeadExports, findDuplicates, packageEntrypoints, riskFor } from './analysis.ts';
 import { collectChurn, hotThreshold } from '../scan/git.ts';
-import type { Graph, GraphNode, GraphEdge, UnresolvedRef, Warning, RawRef, Risk } from './types.ts';
-import { SCHEMA_VERSION } from './types.ts';
+import type { Graph, GraphNode, GraphEdge, UnresolvedRef, Warning, RawRef, ScannerResult } from './types.ts';
+import { SCHEMA_VERSION, SOFT_VALUES } from './types.ts';
 import { readFileSync, existsSync } from 'node:fs';
 
 export interface ScanOptions {
@@ -50,7 +51,8 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
     try { pkg = JSON.parse(readFileSync(pkgPath, 'utf8')); } catch { /* ignore */ }
   }
 
-  const aliases = loadAliases(root);
+  // Import maps last: they only add names nothing else in the project claims.
+  const aliases = [...loadAliases(root, files.map(f => f.id)), ...importMapAliases(files)];
   const psr4 = loadPsr4(root);
 
   const fileById = new Map<string, ScannedFile>();
@@ -58,9 +60,11 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
 
   // Binary leaves are on disk but never content-scanned; they only become
   // nodes if something references them (or below, unconditionally as leaves).
-  // Ignored files are on disk too: never scanned, but an import of one is not
-  // a "missing" file — it becomes a leaf node only if something references it.
-  const existingIds = new Set<string>([...fileById.keys(), ...binaryLeaves.map(b => b.id), ...ignored]);
+  // Ignored and oversized files are on disk too: never scanned, but an import
+  // of one is not a "missing" file — it becomes a leaf node only if something
+  // references it.
+  const unscanned = [...ignored, ...tooLarge];
+  const existingIds = new Set<string>([...fileById.keys(), ...binaryLeaves.map(b => b.id), ...unscanned]);
   const goModules = loadGoModules(root, existingIds);
   // Case-insensitive index built once. Resolving a reference whose case
   // doesn't match the file on disk used to scan every id, making a
@@ -117,25 +121,37 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
   const elementDefinedIn = new Map<string, string>();
   const elementRefs: { from: string; ref: RawRef }[] = [];
 
+  // Scan everything before resolving anything: whether a JSON block is a theme
+  // block depends on the schema of a section scanned elsewhere.
+  const scanned: { file: ScannedFile; result: ScannerResult }[] = [];
+  const localBlocks = new Map<string, Set<string>>();
   for (const file of files) {
     const lang = findLanguage(file.id, { profile });
-    let refs: RawRef[] = [];
-    let exportsList: string[] | undefined;
-    let classesList: string[] | undefined;
-
+    let result: ScannerResult = { refs: [] };
     if (lang) {
       try {
-        const r = lang.scan(file, { profile });
-        refs = r.refs;
-        exportsList = r.exports;
-        classesList = opts.classes ? r.classes : undefined;
-        for (const tag of r.defines ?? []) {
-          if (!elementDefinedIn.has(tag)) elementDefinedIn.set(tag, file.id);
-        }
+        result = lang.scan(file, { profile });
       } catch {
         warnings.push({ code: 'parse_error', file: file.id, message: `invalid ${lang.id}` });
       }
     }
+    if (result.localBlocks?.length) localBlocks.set(file.id, new Set(result.localBlocks));
+    scanned.push({ file, result });
+  }
+
+  // A module beats an inline Liquid script that defines the same element.
+  const isLiquid = (s: { file: ScannedFile }) => langFor(s.file.id) === 'liquid';
+  for (const { file, result } of [...scanned.filter(s => !isLiquid(s)), ...scanned.filter(isLiquid)]) {
+    for (const tag of result.defines ?? []) {
+      if (!elementDefinedIn.has(tag)) elementDefinedIn.set(tag, file.id);
+    }
+  }
+
+  for (const { file, result } of scanned) {
+    const exportsList = result.exports;
+    const classesList = opts.classes ? result.classes : undefined;
+    let refs = result.refs.filter(r =>
+      !(r.section && localBlocks.get(`sections/${r.section}.liquid`)?.has(r.target)));
 
     for (const ref of refs) if (ref.rel === 'custom_element') elementRefs.push({ from: file.id, ref });
     refs = refs.filter(r => r.rel !== 'custom_element');
@@ -166,7 +182,10 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
       out: fileEdges.length,
       risk: 'low',
       orphan: false,
-      entrypoint: isEntrypoint(file.id, profile, pkg),
+      // A section or public theme block with presets is placed from the theme
+      // editor: nothing in the repo references it, and deleting it breaks live
+      // pages. A private (_-prefixed) block is placed only by a file that names it.
+      entrypoint: isEntrypoint(file.id, profile, pkg) || (profile === 'shopify' && !!result.presets && /^(sections\/|blocks\/(?!_))/.test(file.id)),
       ...(exportsList ? { exports: exportsList } : {}),
       ...(classesList ? { classes: classesList } : {}),
     });
@@ -207,10 +226,10 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
     }
   }
 
-  // Ignored files someone references: leaves like a binary, never scanned.
-  const ignoredSet = new Set(ignored);
+  // Unscanned files someone references: leaves like a binary.
+  const unscannedSet = new Set(unscanned);
   for (const e of edges) {
-    if (!ignoredSet.has(e.to) || nodes.has(e.to)) continue;
+    if (!unscannedSet.has(e.to) || nodes.has(e.to)) continue;
     nodes.set(e.to, {
       id: e.to,
       type: classifyNodeType(e.to, profile),
@@ -264,7 +283,7 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
   }
 
   markDeadExports(nodes, edges);
-  const cycles = detectCycles(nodes, edges, warnings);
+  const cycles = detectCycles(nodes, edges.filter(e => !e.value || !SOFT_VALUES.has(e.value)), warnings);
   const duplicates = findDuplicates(nodes.values());
 
   const sortedNodes = [...nodes.values()].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
@@ -303,6 +322,13 @@ export async function buildGraph(opts: ScanOptions): Promise<Graph> {
     cycles,
     duplicates,
   };
+  const scan: Graph['scan'] = {
+    ...(opts.extraIgnore?.length ? { ignore: opts.extraIgnore } : {}),
+    ...(opts.noGitignore ? { noGitignore: true } : {}),
+    ...(opts.noGit ? { noGit: true } : {}),
+    ...(opts.classes ? { classes: true } : {}),
+  };
+  if (Object.keys(scan).length) graph.scan = scan;
 
   return graph;
 }

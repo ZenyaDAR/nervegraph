@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { readGraph } from '../graph/io.ts';
+import { readGraph, resolveGraphPath } from '../graph/io.ts';
 import { VERSION } from '../version.ts';
 import { createServer, listenOnFreePort } from '../server.ts';
 
@@ -11,7 +11,7 @@ export interface ViewArgs {
 }
 
 export async function runView(args: ViewArgs): Promise<number> {
-  const graphPath = path.resolve(args.graph ?? '.nervegraph/graph.json');
+  const graphPath = resolveGraphPath(args.graph);
 
   if (!existsSync(graphPath)) {
     console.error(`error: graph not found at ${graphPath}`);

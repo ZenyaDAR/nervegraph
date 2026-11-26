@@ -1,5 +1,6 @@
 import path from 'node:path';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, rmdirSync, statSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { buildGraph, type ScanOptions } from '../graph/build.ts';
 import { writeGraphAtomic } from '../graph/io.ts';
 import { isExternal } from '../graph/analysis.ts';
@@ -40,6 +41,10 @@ export async function runScan(args: ScanArgs): Promise<number> {
 }
 
 async function scanOnce(args: ScanArgs, root: string): Promise<number> {
+  const outDir = path.resolve(args.out ?? '.nervegraph');
+  // Created before the scan: a folder created after it touches the project
+  // root, and the staleness check would read that as a change.
+  try { await mkdir(outDir, { recursive: true }); } catch { /* reported by the write below */ }
   const graph = await buildGraph({
     root,
     profile: args.profile,
@@ -49,12 +54,14 @@ async function scanOnce(args: ScanArgs, root: string): Promise<number> {
     classes: args.classes,
   });
 
+  if (args.pretty) graph.scan = { ...graph.scan, pretty: true };
+
   if (graph.stats.files === 0) {
+    try { rmdirSync(outDir); } catch { /* not empty, or not ours to remove */ }
     console.error('error: no supported files found');
     return 4;
   }
 
-  const outDir = path.resolve(args.out ?? '.nervegraph');
   let size: number;
   try {
     size = await writeGraphAtomic(outDir, graph, args.pretty);

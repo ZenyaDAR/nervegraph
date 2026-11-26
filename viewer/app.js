@@ -82,6 +82,9 @@
   // including the "no preference reported" case).
   const lightModeQuery = window.matchMedia?.('(prefers-color-scheme: light)');
 
+  const SECTION_DEFAULTS = { view: true, types: true, relations: false, show: true, focus: false };
+  const FOCUS_DIR_LABEL = { both: 'both', out: 'uses', in: 'used by' };
+
   function mode() {
     if (state.theme !== 'auto') return state.theme;
     return lightModeQuery?.matches ? 'light' : 'dark';
@@ -92,10 +95,18 @@
   function applyTheme() {
     if (state.theme === 'auto') delete document.documentElement.dataset.theme;
     else document.documentElement.dataset.theme = state.theme;
+    syncSeg(document.getElementById('theme-btn'), b => b.dataset.themeValue === state.theme);
+    onPaletteChange();
+  }
+
+  // Everything painted with a palette colour has to be repainted when the
+  // effective theme flips — the canvas, and the swatches built in the DOM.
+  function onPaletteChange() {
     themeColors = readThemeColors();
     categoryColorCache = null;
-    document.getElementById('theme-btn').title = `theme: ${state.theme}`;
+    for (const sw of document.querySelectorAll('[data-swatch-type]')) sw.style.background = colorForType(sw.dataset.swatchType);
     renderLegend();
+    renderSide();
     refreshHighlight();
   }
 
@@ -105,12 +116,16 @@
 
   let themeColors = readThemeColors();
   function readThemeColors() {
-    return { pillBg: cssVar('--label-pill-bg'), ink: cssVar('--text'), accent: cssVar('--accent') };
+    return {
+      pillBg: cssVar('--label-pill-bg'), ink: cssVar('--label-ink'),
+      accent: cssVar('--accent'), edgeHi: cssVar('--edge-hi'),
+    };
   }
 
   const state = {
     graph: null,
     nodesById: new Map(),
+    incoming: new Map(),
     typeFilters: new Set(),
     relFilters: new Set(),
     onlyOrphans: false,
@@ -118,6 +133,7 @@
     onlyMissing: false,
     onlyCycles: false,
     search: '',
+    searchActive: 0,
     selected: null,
     hovered: null,
     mode: 'galaxy',
@@ -139,6 +155,10 @@
     groupBy: 0,
     expanded: new Set(),
     clustersById: new Map(),
+    open: { ...SECTION_DEFAULTS },
+    filtersCollapsed: false,
+    tab: 'usedby',
+    perfDismissed: false,
   };
 
   const storageKey = () => `nervegraph:${state.graph ? state.graph.root : ''}`;
@@ -161,27 +181,118 @@
         colorBy: state.colorBy,
         sizeBy: state.sizeBy,
         groupBy: state.groupBy,
+        open: state.open,
+        filtersCollapsed: state.filtersCollapsed,
       }));
     } catch { /* ignore */ }
   }
 
-  function fatal(message) {
-    const banner = document.getElementById('perf-banner');
-    banner.textContent = message;
-    banner.hidden = false;
+  // ── DOM helpers ──────────────────────────────────────────────────────────
+  // Every string that came out of graph.json (paths, raw source lines) goes
+  // in through textContent: those strings are someone else's code.
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = String(text);
+    return e;
+  }
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  function svgEl(w, h, parts, cls) {
+    const s = document.createElementNS(SVG_NS, 'svg');
+    s.setAttribute('width', w);
+    s.setAttribute('height', h);
+    s.setAttribute('aria-hidden', 'true');
+    if (cls) s.setAttribute('class', cls);
+    for (const [tag, attrs] of parts) {
+      const p = document.createElementNS(SVG_NS, tag);
+      for (const [k, v] of Object.entries(attrs)) p.setAttribute(k, v);
+      s.appendChild(p);
+    }
+    return s;
+  }
+  function icon(ds, cls = '') {
+    const s = svgEl(16, 16, ds.map(d => ['path', { d }]), `ic ${cls}`);
+    s.setAttribute('viewBox', '0 0 16 16');
+    return s;
+  }
+  const ICON = {
+    warn: ['M8 2.2l6.2 11H1.8z', 'M8 6.5v3M8 11.3v.1'],
+    ok: ['M3.5 8.5l3 3 6-7'],
+    close: ['M4 4l8 8M12 4l-8 8'],
+  };
+  // The same small marks the filter list and the canvas use, so a row in a
+  // list reads like the node it points at.
+  const MARK = {
+    missing: () => svgEl(12, 12, [['circle', { cx: 6, cy: 6, r: 4.3, fill: 'none', stroke: STATUS_CRITICAL, 'stroke-width': 1.4, 'stroke-dasharray': '2 2' }]]),
+    cycle: () => svgEl(12, 12, [['path', { d: 'M2 6a4 4 0 0 1 7-2.6M10 6a4 4 0 0 1-7 2.6', fill: 'none', stroke: STATUS_CRITICAL, 'stroke-width': 1.5, 'stroke-linecap': 'round' }]]),
+    entry: (color) => svgEl(12, 12, [['circle', { cx: 6, cy: 6, r: 3, fill: color }], ['circle', { cx: 6, cy: 6, r: 5.2, fill: 'none', stroke: color }]]),
+    unused: () => svgEl(12, 12, [['circle', { cx: 6, cy: 6, r: 4.3, fill: 'none', stroke: STATUS_WARNING, 'stroke-width': 1.4 }], ['path', { d: 'M3.5 6h5', stroke: STATUS_WARNING, 'stroke-width': 1.4 }]]),
+  };
+  function swatch(color, type) {
+    const s = el('span', 'sw');
+    s.style.background = color;
+    if (type) s.dataset.swatchType = type;
+    return s;
+  }
+
+  const fmt = (n) => Number(n).toLocaleString('en-US');
+  const plural = (n, one, many = `${one}s`) => `${fmt(n)} ${n === 1 ? one : many}`;
+  const fileOf = (id) => id.split('/').pop();
+  const dirOf = (id) => { const i = id.lastIndexOf('/'); return i < 0 ? '' : id.slice(0, i + 1); };
+  const stemOf = (id) => fileOf(id).replace(/\.[^.]+$/, '');
+  const cap = (s) => s ? s[0].toUpperCase() + s.slice(1) : s;
+
+  // ── Load ─────────────────────────────────────────────────────────────────
+
+  function showState(which, title, text) {
+    document.getElementById('state-card').hidden = false;
+    document.getElementById('state-loading').hidden = which !== 'loading';
+    document.getElementById('state-empty').hidden = which !== 'empty';
+    document.getElementById('state-error').hidden = which !== 'error';
+    if (which === 'error') {
+      document.getElementById('state-error-title').textContent = title;
+      document.getElementById('state-error-text').textContent = text;
+    }
   }
 
   async function main() {
-    const res = await fetch('/graph.json');
-    // The server answers a missing graph with a plain-text hint, not JSON —
-    // parsing it blind threw into an unhandled rejection and left a blank page.
+    wireStateCard();
+    let res;
+    try {
+      res = await fetch('/graph.json');
+    } catch (e) {
+      showState('error', 'Could not reach nerve view', `${e.message}. Is the server still running?`);
+      return;
+    }
+    // The server answers a missing graph with 404 and a plain-text hint.
+    if (res.status === 404) { showState('empty'); return; }
     if (!res.ok) {
-      fatal((await res.text().catch(() => '')).trim() || `could not load graph.json (${res.status})`);
+      showState('error', 'Could not load graph.json', (await res.text().catch(() => '')).trim() || `HTTP ${res.status}`);
       return;
     }
     const graph = await res.json();
     state.graph = graph;
     for (const n of graph.nodes) state.nodesById.set(n.id, n);
+    for (const e of graph.edges) {
+      if (!state.incoming.has(e.to)) state.incoming.set(e.to, []);
+      state.incoming.get(e.to).push(e.from);
+    }
+
+    const stepRead = document.getElementById('step-read');
+    stepRead.textContent = 'done';
+    stepRead.classList.add('done');
+    document.getElementById('step-place').classList.remove('dim3');
+    document.getElementById('step-read-n').textContent = `${fmt(graph.nodes.length)} files · ${fmt(graph.edges.length)} links`;
+    document.getElementById('root-name').textContent = rootName();
+    document.getElementById('counts').textContent = `${fmt(graph.nodes.length)} files · ${fmt(graph.edges.length)} links`;
+    document.title = `${rootName()} · nervegraph`;
+
+    if (!graph.nodes.length) {
+      showState('error', 'Nothing to draw', 'The scan found no files it could read. Check the scan root and .gitignore, then run nerve scan again.');
+      return;
+    }
 
     const allTypes = new Set(graph.nodes.map(n => n.type));
     const allRels = new Set(graph.edges.map(e => e.rel));
@@ -193,13 +304,11 @@
     state.theme = persisted?.theme ?? 'auto';
     state.colorBy = persisted?.colorBy ?? 'type';
     state.sizeBy = persisted?.sizeBy ?? 'in';
+    state.open = { ...SECTION_DEFAULTS, ...(persisted?.open ?? {}) };
+    state.filtersCollapsed = persisted?.filtersCollapsed ?? false;
     // Big graphs open folded: 3000 dots say less than 30 folders do.
     state.groupBy = persisted?.groupBy ?? (graph.nodes.length > 1200 ? 1 : 0);
     state.cycles = indexCycles(graph);
-
-    document.getElementById('root-name').textContent = graph.root.split(/[\\/]/).pop();
-    document.getElementById('counts').textContent = `${graph.nodes.length} nodes · ${graph.edges.length} edges`;
-    document.getElementById('mode-indicator').textContent = state.mode;
 
     // Before the UI is built: it may drop the `asset` filter, and the checkbox
     // and the initial graph data both have to be built from the final filter set.
@@ -210,14 +319,29 @@
     updateStatusBar();
     wireTopLevelUI();
     applyHash();
+    renderSide();
+    renderPerfBanner();
 
     subscribeToGraphChanges();
+    lightModeQuery?.addEventListener?.('change', () => { if (state.theme === 'auto') onPaletteChange(); });
 
-    lightModeQuery?.addEventListener?.('change', () => {
-      themeColors = readThemeColors();
-      categoryColorCache = null;
-      renderLegend();
-      refreshHighlight();
+    // Two frames: one for force-graph to lay the first tick out, one to paint it.
+    requestAnimationFrame(() => requestAnimationFrame(() => { document.getElementById('state-card').hidden = true; }));
+  }
+
+  function rootName() {
+    return (state.graph?.root ?? '').split(/[\\/]/).filter(Boolean).pop() ?? '';
+  }
+
+  function wireStateCard() {
+    const reload = () => location.reload();
+    document.getElementById('state-reload').addEventListener('click', reload);
+    document.getElementById('state-error-reload').addEventListener('click', reload);
+    const copy = document.getElementById('copy-scan');
+    copy.addEventListener('click', () => {
+      navigator.clipboard?.writeText('npx nervegraph@latest scan');
+      copy.textContent = 'Copied';
+      setTimeout(() => { copy.textContent = 'Copy'; }, 1200);
     });
   }
 
@@ -229,65 +353,88 @@
   function subscribeToGraphChanges() {
     if (!window.EventSource) return;
     const events = new EventSource('/events');
+    const watch = document.getElementById('watch-status');
+    events.onopen = () => { watch.hidden = false; };
     events.addEventListener('graph', () => {
-      const banner = document.getElementById('perf-banner');
-      banner.textContent = 'graph changed — reloading';
-      banner.hidden = false;
+      showBanner('Graph changed — reloading');
       setTimeout(() => location.reload(), 300);
     });
     // A dropped connection just means `nerve view` stopped; EventSource
-    // reconnects on its own, so there is nothing to report.
-    events.onerror = () => {};
+    // reconnects on its own, and the indicator comes back with it.
+    events.onerror = () => { watch.hidden = true; };
+  }
+
+  // ── Filters ──────────────────────────────────────────────────────────────
+
+  const typeRows = [];
+  const relRows = [];
+
+  function filterRow(key, set, label, mark, count, rows) {
+    const row = el('label', 'row');
+    const cb = el('input', 'chk');
+    cb.type = 'checkbox';
+    cb.checked = set.has(key);
+    row.classList.toggle('off', !cb.checked);
+    cb.addEventListener('change', () => {
+      cb.checked ? set.add(key) : set.delete(key);
+      row.classList.toggle('off', !cb.checked);
+      onFilterSetChange();
+    });
+    row.append(cb, mark, label, el('span', 'n', fmt(count)));
+    rows.push({ key, cb, row });
+    return row;
+  }
+
+  function onFilterSetChange() {
+    savePersisted();
+    applyFilters();
+    updateFilterSummaries();
+  }
+
+  function setAll(rows, set, on) {
+    for (const r of rows) {
+      on ? set.add(r.key) : set.delete(r.key);
+      r.cb.checked = on;
+      r.row.classList.toggle('off', !on);
+    }
+    onFilterSetChange();
   }
 
   function buildFilterUI(allTypes, allRels) {
     const typeCounts = {};
     for (const n of state.graph.nodes) typeCounts[n.type] = (typeCounts[n.type] ?? 0) + 1;
     const typeBox = document.getElementById('type-filters');
-    for (const t of [...allTypes].sort()) {
-      const label = document.createElement('label');
-      const swatch = document.createElement('span');
-      swatch.className = 'type-swatch';
-      swatch.style.background = colorForType(t);
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = state.typeFilters.has(t);
-      cb.addEventListener('change', () => {
-        cb.checked ? state.typeFilters.add(t) : state.typeFilters.delete(t);
-        savePersisted();
-        applyFilters();
-      });
-      label.append(cb, swatch, ` ${t} `, span(typeCounts[t]));
-      typeBox.appendChild(label);
+    for (const t of [...allTypes].sort((a, b) => typeCounts[b] - typeCounts[a] || (a < b ? -1 : 1))) {
+      typeBox.appendChild(filterRow(t, state.typeFilters, t, swatch(colorForType(t), t), typeCounts[t], typeRows));
     }
 
+    const relCounts = {};
+    for (const e of state.graph.edges) relCounts[e.rel] = (relCounts[e.rel] ?? 0) + 1;
     const relBox = document.getElementById('rel-filters');
-    for (const r of [...allRels].sort()) {
-      const label = document.createElement('label');
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = state.relFilters.has(r);
-      cb.addEventListener('change', () => {
-        cb.checked ? state.relFilters.add(r) : state.relFilters.delete(r);
-        savePersisted();
-        applyFilters();
-      });
-      label.append(cb, ` ${r}`);
-      relBox.appendChild(label);
+    for (const r of [...allRels].sort((a, b) => relCounts[b] - relCounts[a] || (a < b ? -1 : 1))) {
+      const line = svgEl(20, 8, [['path', { d: 'M1 4H19', stroke: 'var(--edge-hi)', 'stroke-width': 1.6, ...(DASHED_RELS.has(r) ? { 'stroke-dasharray': '3 2' } : {}) }]]);
+      relBox.appendChild(filterRow(r, state.relFilters, r, line, relCounts[r], relRows));
     }
 
-    const orphanCount = state.graph.nodes.filter(n => n.orphan).length;
-    const riskCount = state.graph.nodes.filter(n => n.risk === 'high').length;
-    const missingCount = state.graph.nodes.filter(n => n.missing).length;
-    document.getElementById('count-orphans').textContent = orphanCount;
-    document.getElementById('count-risk').textContent = riskCount;
-    document.getElementById('count-missing').textContent = missingCount;
-    document.getElementById('count-cycles').textContent = state.cycles.nodes.size;
+    for (const b of document.querySelectorAll('[data-bulk]')) {
+      b.addEventListener('click', () => {
+        const [kind, how] = b.dataset.bulk.split('-');
+        if (kind === 'types') setAll(typeRows, state.typeFilters, how === 'all');
+        else setAll(relRows, state.relFilters, how === 'all');
+      });
+    }
 
-    document.getElementById('only-orphans').addEventListener('change', (e) => { state.onlyOrphans = e.target.checked; applyFilters(); });
-    document.getElementById('only-risk').addEventListener('change', (e) => { state.onlyRisk = e.target.checked; applyFilters(); });
-    document.getElementById('only-missing').addEventListener('change', (e) => { state.onlyMissing = e.target.checked; applyFilters(); });
-    document.getElementById('only-cycles').addEventListener('change', (e) => { state.onlyCycles = e.target.checked; applyFilters(); });
+    const counts = {
+      orphans: state.graph.nodes.filter(n => n.orphan).length,
+      risk: state.graph.nodes.filter(n => n.risk === 'high').length,
+      missing: state.graph.nodes.filter(n => n.missing).length,
+      cycles: state.cycles.nodes.size,
+    };
+    for (const [k, v] of Object.entries(counts)) document.getElementById(`count-${k}`).textContent = fmt(v);
+
+    for (const [id, key] of [['only-orphans', 'onlyOrphans'], ['only-risk', 'onlyRisk'], ['only-missing', 'onlyMissing'], ['only-cycles', 'onlyCycles']]) {
+      document.getElementById(id).addEventListener('change', (e) => { state[key] = e.target.checked; applyFilters(); updateFilterSummaries(); });
+    }
 
     const colorBy = document.getElementById('color-by');
     colorBy.value = state.colorBy;
@@ -305,25 +452,92 @@
 
     const groupBy = document.getElementById('group-by');
     groupBy.value = String(state.groupBy);
-    groupBy.addEventListener('change', () => {
-      state.groupBy = Number(groupBy.value);
-      state.expanded.clear();
-      savePersisted();
-      applyFilters();
-    });
+    groupBy.addEventListener('change', () => setGroupBy(Number(groupBy.value)));
 
     document.getElementById('collapse-all').addEventListener('click', () => {
       state.expanded.clear();
       applyFilters();
     });
 
-    for (const [id, key, cast] of [['focus-depth', 'focusDepth', Number], ['focus-dir', 'focusDir', String]]) {
-      const el = document.getElementById(id);
-      el.value = String(state[key]);
-      el.addEventListener('change', () => { state[key] = cast(el.value); applyFilters(); });
+    wireSeg('focus-depth', () => String(state.focusDepth), v => { state.focusDepth = Number(v); });
+    wireSeg('focus-dir', () => state.focusDir, v => { state.focusDir = v; });
+
+    for (const sec of document.querySelectorAll('#filters .sec[data-sec]')) {
+      const key = sec.dataset.sec;
+      const head = sec.querySelector('.sh');
+      const sync = () => {
+        sec.classList.toggle('closed', !state.open[key]);
+        head.setAttribute('aria-expanded', String(!!state.open[key]));
+      };
+      head.addEventListener('click', () => { state.open[key] = !state.open[key]; sync(); savePersisted(); });
+      sync();
     }
 
+    const filters = document.getElementById('filters');
+    const syncCollapsed = () => filters.classList.toggle('collapsed', state.filtersCollapsed);
+    document.getElementById('filters-collapse').addEventListener('click', () => { state.filtersCollapsed = true; syncCollapsed(); savePersisted(); });
+    document.getElementById('filters-expand').addEventListener('click', () => { state.filtersCollapsed = false; syncCollapsed(); savePersisted(); });
+    syncCollapsed();
+
     renderLegend();
+    updateFilterSummaries();
+  }
+
+  function wireSeg(id, get, set) {
+    const seg = document.getElementById(id);
+    const sync = () => syncSeg(seg, b => b.dataset.value === get());
+    for (const b of seg.querySelectorAll('button')) {
+      b.addEventListener('click', () => {
+        set(b.dataset.value);
+        sync();
+        updateFilterSummaries();
+        if (state.focusId) applyFilters();
+      });
+    }
+    sync();
+  }
+
+  function syncSeg(seg, isOn) {
+    for (const b of seg.querySelectorAll('button')) {
+      const on = isOn(b);
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-checked', String(on));
+    }
+  }
+
+  function updateFilterSummaries() {
+    document.getElementById('types-summary').textContent = `${typeRows.filter(r => r.cb.checked).length} of ${typeRows.length}`;
+    document.getElementById('rels-summary').textContent = `${relRows.filter(r => r.cb.checked).length} of ${relRows.length}`;
+    document.getElementById('focus-summary').textContent = `depth ${state.focusDepth} · ${FOCUS_DIR_LABEL[state.focusDir]}`;
+    const hiddenTypes = typeRows.filter(r => !r.cb.checked).map(r => r.key);
+    const hiddenRels = relRows.filter(r => !r.cb.checked).length;
+    const only = ['onlyOrphans', 'onlyRisk', 'onlyMissing', 'onlyCycles'].filter(k => state[k]).length;
+    const active = hiddenTypes.length + hiddenRels + only;
+    const badge = document.getElementById('filters-active');
+    badge.textContent = active ? String(active) : '';
+    badge.title = active
+      ? [hiddenTypes.length && `hidden: ${hiddenTypes.join(', ')}`, hiddenRels && `${hiddenRels} relations off`, only && `${only} show-only on`].filter(Boolean).join(' · ')
+      : '';
+  }
+
+  function setGroupBy(depth) {
+    state.groupBy = depth;
+    state.expanded.clear();
+    document.getElementById('group-by').value = String(depth);
+    savePersisted();
+    applyFilters();
+    renderPerfBanner();
+  }
+
+  function updateGroupHint() {
+    const hint = document.getElementById('group-hint');
+    const collapse = document.getElementById('collapse-all');
+    hint.hidden = collapse.hidden = !state.groupBy;
+    if (!state.groupBy) return;
+    const folders = state.clustersById.size;
+    const opened = state.expanded.size;
+    hint.textContent = `${plural(folders, 'folder')} on the map, ${opened ? `${fmt(opened)} opened` : 'none opened'}. Click a folder to open it.`;
+    collapse.disabled = !opened;
   }
 
   // ── Categorical coloring ─────────────────────────────────────────────────
@@ -363,9 +577,9 @@
 
   function renderLegend() {
     const box = document.getElementById('legend');
-    if (!box) return;
+    if (!box || !state.graph) return;
     box.replaceChildren();
-    // With "color by type" the Types filter below is already the legend, and
+    // With "color by type" the File types filter is already the legend, and
     // repeating it would just push the filters off-screen.
     if (state.colorBy === 'type') return;
 
@@ -373,19 +587,11 @@
       ? [['high', RISK_COLOR.high], ['medium', RISK_COLOR.medium], ['low', RISK_COLOR.low], ['missing', STATUS_CRITICAL]]
           .map(([name, color]) => [name, color, state.graph.nodes.filter(n => (name === 'missing' ? n.missing : n.risk === name)).length])
       : (categoryColors(), categoryColorCache.ordered.slice(0, 9)
-          .map(([name, count]) => [name, categoryColorCache.map.get(name), count]));
+          .map(([name, count], i) => [i < 8 ? name : 'other', i < 8 ? categoryColorCache.map.get(name) : OTHER_HUE, i < 8 ? count : categoryColorCache.ordered.slice(8).reduce((s, [, c]) => s + c, 0)]));
 
     for (const [name, color, count] of rows) {
-      const row = document.createElement('div');
-      row.className = 'row';
-      const swatch = document.createElement('span');
-      swatch.className = 'type-swatch';
-      swatch.style.background = color;
-      const label = document.createElement('span');
-      label.textContent = name;
-      const num = document.createElement('span');
-      num.textContent = count;
-      row.append(swatch, label, num);
+      const row = el('div', 'row');
+      row.append(swatch(color), el('span', '', name), el('span', 'n', fmt(count)));
       box.appendChild(row);
     }
   }
@@ -404,14 +610,6 @@
       for (let i = 0; i + 1 < files.length; i++) edges.add(`${files[i]}\0${files[i + 1]}`);
     }
     return { nodes, edges, list };
-  }
-
-  function span(text) {
-    const s = document.createElement('span');
-    s.textContent = text;
-    s.style.color = 'var(--text-dim)';
-    s.style.marginLeft = 'auto';
-    return s;
   }
 
   let fg;
@@ -450,6 +648,20 @@
       frontier = next;
     }
     return visited;
+  }
+
+  // Every file that reaches `id` through any chain of references: the set a
+  // change to `id` can break. Same walk as `nerve query`'s transitiveDependents.
+  function transitiveDependents(id) {
+    const seen = new Set([id]);
+    const queue = [id];
+    while (queue.length) {
+      for (const from of state.incoming.get(queue.shift()) ?? []) {
+        if (!seen.has(from)) { seen.add(from); queue.push(from); }
+      }
+    }
+    seen.delete(id);
+    return seen;
   }
 
   // Shortest dependency path, tried in both directions so shift-clicking works
@@ -503,12 +715,20 @@
         c = {
           id: cid, cluster: true, files: [], type: 'unknown', lang: 'folder',
           risk: 'low', in: 0, out: 0, loc: 0, size: 0, orphan: false, entrypoint: false,
+          typeCounts: {},
         };
         clusters.set(cid, c);
       }
       c.files.push(n.id);
       c.loc += n.loc;
       c.size += n.size;
+      c.typeCounts[n.type] = (c.typeCounts[n.type] ?? 0) + 1;
+    }
+    // A folder takes the colour of the file type it mostly holds, so
+    // "sections/" still reads blue and "snippets/" aqua.
+    for (const c of clusters.values()) {
+      c.type = Object.entries(c.typeCounts).sort((a, b) => b[1] - a[1])[0][0];
+      c.lang = state.nodesById.get(c.files[0])?.lang ?? 'folder';
     }
 
     const byPair = new Map();
@@ -550,12 +770,15 @@
       else byPair.set(key, { ...e, source: e.from, target: e.to, _count: 1 });
     }
     const links = [...byPair.values()];
-    return state.groupBy ? foldByFolder(nodes, links) : { nodes, links };
+    if (state.groupBy) return foldByFolder(nodes, links);
+    state.clustersById = new Map();
+    return { nodes, links };
   }
 
   function setGraphData(data) {
     state.visibleNodeCount = data.nodes.length;
     fg.graphData(data);
+    updateGroupHint();
   }
 
   function nodeRadius(n) {
@@ -588,14 +811,18 @@
   }
 
   function nodeTooltip(n) {
-    const el = document.createElement('span');
-    el.textContent = n.id;
-    return el;
+    const box = el('span');
+    const name = el('b');
+    name.textContent = n.id;
+    box.append(name);
+    const sub = n.cluster ? `${plural(n.files.length, 'file')} · click to open` : `${n.in} in · ${n.out} out`;
+    box.append(el('span', 'tip-sub', sub));
+    return box;
   }
 
   function buildGraphInstance() {
-    const el = document.getElementById('graph');
-    fg = ForceGraph()(el)
+    const host = document.getElementById('graph');
+    fg = ForceGraph()(host)
       .graphData(buildGraphData())
       .nodeId('id')
       // force-graph renders a string label as HTML, and ids come from import
@@ -604,12 +831,9 @@
       .nodeCanvasObjectMode(() => 'replace')
       .nodeCanvasObject(drawNode)
       .nodePointerAreaPaint(paintNodePointerArea)
-      .linkColor(l => colorForLink(l))
-      .linkLineDash(l => DASHED_RELS.has(l.rel) ? [3, 2] : null)
-      .linkWidth(l => 1 + Math.min(3, (l._count ?? 1) - 1))
+      .linkLineDash(l => (isMissingLink(l) ? [2, 3] : DASHED_RELS.has(l.rel) ? [3, 2] : null))
       .linkDirectionalArrowLength(3)
       .linkDirectionalArrowRelPos(1)
-      .linkDirectionalParticles(l => isHighlighted(l) ? 2 : 0)
       .linkDirectionalParticleWidth(2)
       .onNodeClick(handleNodeClick)
       .onNodeHover(handleNodeHover)
@@ -620,6 +844,7 @@
       .d3VelocityDecay(0.4);
 
     state.visibleNodeCount = fg.graphData().nodes.length;
+    updateGroupHint();
 
     // Hub nodes (high in-degree) draw a wide label pill that plain -180
     // charge doesn't push clear of neighbors — scale repulsion by the node's
@@ -629,13 +854,22 @@
     fg.d3Force('center').strength(0.05);
 
     applyMode();
-    window.addEventListener('resize', () => fg.width(el.clientWidth).height(el.clientHeight));
-    fg.width(el.clientWidth).height(el.clientHeight);
+    refreshHighlight();
+    // Covers the window, the filter rail and the mobile sheet alike.
+    new ResizeObserver(() => fg.width(host.clientWidth).height(host.clientHeight)).observe(host);
+    fg.width(host.clientWidth).height(host.clientHeight);
   }
 
   function applyMode() {
     fg.dagMode(state.mode === 'tree' ? 'td' : null);
-    document.getElementById('mode-indicator').textContent = state.mode;
+    document.getElementById('mode-indicator').textContent = cap(state.mode);
+    syncSeg(document.getElementById('layout-seg'), b => b.dataset.mode === state.mode);
+  }
+
+  function setMode(m) {
+    state.mode = m;
+    savePersisted();
+    applyMode();
   }
 
   function colorForType(type) {
@@ -647,23 +881,28 @@
     if (state.colorBy === 'type') return colorForType(n.type);
     return categoryColors().get(categoryOf(n)) ?? OTHER_HUE;
   }
+  const linkKey = (l) => `${l.from}\0${l.to}`;
+  const isMissingLink = (l) => !!state.nodesById.get(l.to)?.missing;
+  const onPath = (l) => !!state.path?.edges.has(linkKey(l));
   function colorForLink(l) {
-    if (state.path?.edges.has(`${l.from}\0${l.to}`)) return themeColors.accent;
+    if (onPath(l)) return themeColors.accent;
     // A cycle is the one structural defect the graph can prove, so it outranks
-    // the relation's own muted colour.
-    if (state.cycles.edges.has(`${l.from}\0${l.to}`)) return STATUS_CRITICAL;
+    // the relation's own muted colour; a reference to a missing file is next.
+    if (state.cycles.edges.has(linkKey(l)) || isMissingLink(l)) return STATUS_CRITICAL;
+    if (!state.path && isHighlighted(l)) return themeColors.edgeHi;
     return REL_COLOR[mode()][l.rel] ?? REL_COLOR[mode()].render;
   }
 
   function isHighlighted(link) {
-    if (state.path) return state.path.edges.has(`${link.from}\0${link.to}`);
-    if (!state.selected && !state.hovered) return false;
+    if (state.path) return onPath(link);
     const active = state.selected ?? state.hovered;
+    if (!active) return false;
     return link.from === active || link.to === active;
   }
 
   function handleNodeHover(node) {
     state.hovered = node ? node.id : null;
+    document.getElementById('graph').style.cursor = node ? 'pointer' : '';
     refreshHighlight();
   }
 
@@ -679,11 +918,10 @@
       state.path = shortestPath(state.selected, node.id);
       state.pathTarget = node.id;
       refreshHighlight();
+      renderSide();
       updateStatusBar();
       return;
     }
-    state.path = null;
-    state.pathTarget = null;
     selectNode(node.id);
   }
 
@@ -695,19 +933,30 @@
       state.expanded.add(hiddenIn);
       setGraphData(buildGraphData());
     }
+    if (state.selected !== id) state.tab = 'usedby';
     state.selected = id;
+    state.path = null;
+    state.pathTarget = null;
     refreshHighlight();
-    renderDetails(id);
+    renderSide();
     updateStatusBar();
     syncHash();
+  }
+
+  function clearPath() {
+    state.path = null;
+    state.pathTarget = null;
+    refreshHighlight();
+    renderSide();
+    updateStatusBar();
   }
 
   function clearSelection() {
     state.selected = null;
     state.path = null;
     state.pathTarget = null;
-    closeDetails();
     refreshHighlight();
+    renderSide();
     updateStatusBar();
     syncHash();
   }
@@ -737,18 +986,25 @@
   // (see drawNode/colorForLink), so "refreshing the highlight" is really just
   // forcing force-graph to repaint with the current selection/hover state.
   function refreshHighlight() {
+    if (!fg) return;
     fg.linkColor(l => {
       const c = colorForLink(l);
-      if (state.path) return state.path.edges.has(`${l.from}\0${l.to}`) ? c : dim(c);
+      if (state.path) return onPath(l) ? c : dim(c, '38');
       const active = state.selected ?? state.hovered;
       if (!active) return c;
-      return (l.from === active || l.to === active) ? c : dim(c);
+      return (l.from === active || l.to === active) ? c : dim(c, '38');
     });
-    fg.linkDirectionalParticles(l => isHighlighted(l) ? 2 : 0);
+    fg.linkWidth(l => (onPath(l) ? 3 : isHighlighted(l) ? 1.6 : 1) + Math.min(3, (l._count ?? 1) - 1));
+    // Particles cost a draw per link per frame; past 2,000 nodes they cost more
+    // than they say.
+    const particles = state.visibleNodeCount <= 2000;
+    fg.linkDirectionalParticles(l => (particles && isHighlighted(l) ? 2 : 0));
+    document.getElementById('shift-hint').hidden = !state.selected || !!state.pathTarget;
   }
 
-  function dim(hex) {
-    return hex + '1f'; // ~12% alpha
+  // Alpha as a hex suffix: '24' ≈ 14% for nodes, '38' ≈ 22% for edges.
+  function dim(hex, alpha = '24') {
+    return hex + alpha;
   }
 
   // --- Canvas node rendering: circle + entrypoint ring + missing dash +
@@ -764,13 +1020,22 @@
     const dimmed = state.path ? !state.path.ids.has(node.id) : (active && !isNeighbor);
     const baseColor = node.missing ? STATUS_CRITICAL : colorForNode(node);
     const color = dimmed ? dim(baseColor) : baseColor;
+    const px = 1 / globalScale;
 
     // A folder is drawn as a square so it never reads as "one big file".
     if (node.cluster) {
       roundRectPath(ctx, node.x - r, node.y - r, r * 2, r * 2, r / 3);
       ctx.fillStyle = color;
       ctx.fill();
-      drawLabel(node, ctx, globalScale, r);
+      const size = r * 0.62;
+      if (!dimmed && size * globalScale >= 7) {
+        ctx.font = `600 ${size}px -apple-system, Segoe UI, sans-serif`;
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(fmt(node.files.length), node.x, node.y + size * 0.05);
+      }
+      if (!dimmed) drawLabel(node, ctx, globalScale, r, `${fileOf(node.id.replace(/\/$/, ''))}/`);
       return;
     }
 
@@ -795,6 +1060,25 @@
       ctx.stroke();
     }
 
+    const isSelected = node.id === state.selected && !state.path;
+    const pathEnd = state.path && (node.id === state.path.order[0] ? 'A' : node.id === state.path.order.at(-1) ? 'B' : null);
+    if (isSelected || pathEnd) {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r + (node.entrypoint ? 6 : 4), 0, 2 * Math.PI, false);
+      ctx.lineWidth = 2 * px;
+      ctx.strokeStyle = themeColors.accent;
+      ctx.stroke();
+      if (isSelected) {
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, r + (node.entrypoint ? 6 : 4) + 6 * px, 0, 2 * Math.PI, false);
+        ctx.lineWidth = px;
+        ctx.strokeStyle = themeColors.accent + '59';
+        ctx.stroke();
+      }
+      drawLabel(node, ctx, globalScale, r + 6, pathEnd ? `${pathEnd} · ${fileOf(node.id)}` : basename(node.id), true);
+      return;
+    }
+
     if (!dimmed && (isNeighbor || state.path?.ids.has(node.id) || shouldLabel(node, globalScale))) {
       drawLabel(node, ctx, globalScale, r);
     }
@@ -807,22 +1091,24 @@
     return node.in >= 10;
   }
 
-  function drawLabel(node, ctx, globalScale, r) {
-    const label = node.cluster ? `${basename(node.id.replace(/\/$/, ''))}/ ${node.files.length}` : basename(node.id);
-    const fontSize = Math.max(11 / globalScale, 1.6);
-    ctx.font = `${fontSize}px -apple-system, Segoe UI, sans-serif`;
+  // `strong` is the selected file's label: an accent pill with white text, so
+  // the one file the panel is about is findable in any cloud.
+  function drawLabel(node, ctx, globalScale, r, text, strong = false) {
+    const label = text ?? basename(node.id);
+    const fontSize = Math.max((strong ? 11.5 : 11) / globalScale, 1.6);
+    ctx.font = `${strong ? '600 ' : ''}${fontSize}px -apple-system, Segoe UI, sans-serif`;
     const textWidth = ctx.measureText(label).width;
-    const padX = 4 / globalScale;
-    const padY = 2 / globalScale;
+    const padX = (strong ? 6 : 4) / globalScale;
+    const padY = (strong ? 4 : 2) / globalScale;
     const boxW = textWidth + padX * 2;
     const boxH = fontSize + padY * 2;
     const top = node.y + r + 2 / globalScale;
 
-    roundRectPath(ctx, node.x - boxW / 2, top, boxW, boxH, 3 / globalScale);
-    ctx.fillStyle = themeColors.pillBg;
+    roundRectPath(ctx, node.x - boxW / 2, top, boxW, boxH, (strong ? 5 : 4) / globalScale);
+    ctx.fillStyle = strong ? themeColors.accent : themeColors.pillBg;
     ctx.fill();
 
-    ctx.fillStyle = themeColors.ink;
+    ctx.fillStyle = strong ? '#ffffff' : themeColors.ink;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(label, node.x, top + boxH / 2);
@@ -844,96 +1130,387 @@
   }
 
   function paintNodePointerArea(node, color, ctx) {
+    const r = nodeRadius(node) + 2;
     ctx.fillStyle = color;
+    if (node.cluster) { ctx.fillRect(node.x - r, node.y - r, r * 2, r * 2); return; }
     ctx.beginPath();
-    ctx.arc(node.x, node.y, nodeRadius(node) + 2, 0, 2 * Math.PI, false);
+    ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false);
     ctx.fill();
+  }
+
+  // ── Side panel ───────────────────────────────────────────────────────────
+
+  function renderSide() {
+    if (!state.graph) return;
+    document.body.classList.toggle('has-selection', !!state.selected);
+    const overview = document.getElementById('overview');
+    const body = document.getElementById('details-body');
+    const busy = !!state.selected;
+    overview.hidden = busy;
+    body.hidden = !busy;
+    document.getElementById('details').setAttribute('aria-label', state.pathTarget ? 'Path details' : busy ? 'Selected file' : 'Project overview');
+    if (state.pathTarget) renderPathDetails();
+    else if (busy) renderDetails(state.selected);
+    else renderOverview();
+    renderPathBanner();
+  }
+
+  // One row component for every list of files: swatch or mark, file name,
+  // muted directory, relation on the right, and optionally the evidence line.
+  function refRow({ id, mark, rel, relClass, src, onClick, label }) {
+    const b = el('button', 'ref');
+    b.type = 'button';
+    const top = el('span', 'top');
+    if (mark) top.append(mark);
+    if (label) top.append(label);
+    else if (id) top.append(el('span', 'file', fileOf(id)), el('span', 'dir', dirOf(id)));
+    if (rel) top.append(el('span', `rel ${relClass ?? ''}`, rel));
+    b.append(top);
+    if (id) b.title = id;
+    if (src) b.append(srcLine(src.line, src.raw, src.mark));
+    if (onClick) b.addEventListener('click', onClick);
+    return b;
+  }
+
+  // The evidence line: the line number and the source text that creates a
+  // relation, with the name it references marked.
+  function srcLine(line, raw, markName) {
+    const box = el('span', 'src');
+    box.append(el('span', 'ln', line ?? ''));
+    const code = el('code');
+    const text = String(raw ?? '');
+    const at = markName ? text.indexOf(markName) : -1;
+    if (at < 0) code.textContent = text;
+    else code.append(text.slice(0, at), el('mark', '', markName), text.slice(at + markName.length));
+    box.append(code);
+    return box;
+  }
+
+  function markFor(id) {
+    const n = state.nodesById.get(id);
+    if (!n) return swatch(OTHER_HUE);
+    if (n.missing) return MARK.missing();
+    return swatch(colorForNode(n));
+  }
+
+  function renderOverview() {
+    const g = state.graph;
+    document.getElementById('ov-name').textContent = rootName();
+
+    const unresolved = g.unresolved ?? [];
+    const byReason = {};
+    for (const u of unresolved) byReason[u.reason] = (byReason[u.reason] ?? 0) + 1;
+    const reasons = Object.entries(byReason).map(([r, n]) => `${n} ${r}`).join(', ');
+    const stats = [
+      ['Files', fmt(g.nodes.length)],
+      ['Links', fmt(g.edges.length)],
+      ['Orphans', fmt(g.stats?.orphans ?? g.nodes.filter(n => n.orphan).length)],
+      ['Unresolved', fmt(unresolved.length), reasons],
+      ['Cycles', fmt(state.cycles.list.length), null, state.cycles.list.length > 0],
+    ];
+    const dl = document.getElementById('ov-stats');
+    dl.replaceChildren();
+    for (const [k, v, extra, crit] of stats) {
+      const dd = el('dd', crit ? 'crit' : '', v);
+      if (extra) dd.append(el('span', 'dim3', ` · ${extra}`));
+      dl.append(el('dt', '', k), dd);
+    }
+
+    const entries = g.nodes.filter(n => n.entrypoint && !n.missing).sort((a, b) => b.out - a.out).slice(0, 5);
+    const entryBox = document.getElementById('ov-entry');
+    entryBox.replaceChildren(...entries.map(n => refRow({ id: n.id, mark: MARK.entry(colorForNode(n)), rel: `uses ${fmt(n.out)}`, onClick: () => selectNode(n.id) })));
+    entryBox.hidden = document.getElementById('ov-entry-title').hidden = !entries.length;
+
+    const hubs = g.nodes.filter(n => !n.missing && n.in > 0).sort((a, b) => b.in - a.in).slice(0, 3);
+    const hubBox = document.getElementById('ov-hubs');
+    hubBox.replaceChildren(...hubs.map(n => refRow({ id: n.id, mark: swatch(colorForNode(n)), rel: `used by ${fmt(n.in)}`, onClick: () => selectNode(n.id) })));
+    hubBox.hidden = document.getElementById('ov-hubs-title').hidden = !hubs.length;
+  }
+
+  function detailsHead(dir, title, onClose, closeLabel) {
+    const head = el('div', 'd-head');
+    const row = el('div', 'd-title');
+    const text = el('div');
+    if (dir) text.append(el('div', 'd-dir', dir));
+    text.append(el('h2', 'title', title));
+    const close = el('button', 'btn quiet sq');
+    close.type = 'button';
+    close.setAttribute('aria-label', closeLabel);
+    close.title = closeLabel;
+    close.append(icon(ICON.close));
+    close.addEventListener('click', onClose);
+    row.append(text, close);
+    head.append(row);
+    return head;
   }
 
   function renderDetails(id) {
     const n = state.nodesById.get(id);
     const body = document.getElementById('details-body');
-    if (!n) { body.replaceChildren(); return; }
+    body.replaceChildren();
+    if (!n) return;
 
     const usedBy = state.graph.edges.filter(e => e.to === id);
     const uses = state.graph.edges.filter(e => e.from === id);
 
-    body.replaceChildren();
-
-    const h3 = document.createElement('h3');
-    h3.textContent = n.id;
-    body.appendChild(h3);
-
-    const typeLine = document.createElement('div');
-    typeLine.className = 'type-line';
-    const swatch = document.createElement('span');
-    swatch.className = 'type-swatch';
-    swatch.style.background = colorForNode(n);
-    const churnLabel = n.churn !== undefined ? ` · ${n.churn} commits` : '';
-    typeLine.append(swatch, ` ${n.lang} ${n.type} · ${n.loc} loc · ${(n.size / 1024).toFixed(1)} KB${churnLabel}`);
-    body.appendChild(typeLine);
-
-    if (n.deadExports?.length) {
-      const dead = document.createElement('div');
-      dead.className = 'risk-box medium';
-      dead.textContent = `unused exports: ${n.deadExports.join(', ')}`;
-      body.appendChild(dead);
-    }
-
-    if (state.cycles.nodes.has(n.id)) {
-      const warn = document.createElement('div');
-      warn.className = 'risk-box missing';
-      warn.textContent = '⚠ part of a dependency cycle';
-      warn.style.cursor = 'pointer';
-      warn.addEventListener('click', () => openIssues('cycles'));
-      body.appendChild(warn);
-    }
-
+    const head = detailsHead(dirOf(n.id), fileOf(n.id), clearSelection, 'Clear selection (Esc)');
+    const meta = el('div', 'd-meta');
     if (n.missing) {
-      const warn = document.createElement('div');
-      warn.className = 'risk-box missing';
-      warn.textContent = `⚠ file does not exist, but ${n.in} file(s) reference it`;
-      body.appendChild(warn);
+      meta.append(MARK.missing(), 'Referenced, not on disk');
     } else {
-      const riskBox = document.createElement('div');
-      riskBox.className = `risk-box ${n.risk}`;
-      const left = document.createElement('span');
-      left.textContent = `RISK ${n.risk.toUpperCase()}`;
-      const right = document.createElement('span');
-      right.textContent = `${n.in} dependents`;
-      riskBox.append(left, right);
-      body.appendChild(riskBox);
+      const bits = [`${cap(n.lang)} ${n.type}`, plural(n.loc, 'line'), `${(n.size / 1024).toFixed(1)} KB`];
+      if (n.churn !== undefined) bits.push(plural(n.churn, 'commit'));
+      meta.append(swatch(colorForNode(n)), bits.join(' · '));
     }
+    head.append(meta);
 
-    appendRefList(body, `USED BY (${usedBy.length})`, usedBy, e => e.from);
-    appendRefList(body, `USES (${uses.length})`, uses, e => e.to);
+    const scroll = el('div', 'd-scroll');
+    scroll.append(impactSection(n, uses));
 
-    const actions = document.createElement('div');
-    actions.className = 'actions';
-    const focusBtn = document.createElement('button');
-    focusBtn.textContent = state.focusId === id ? 'exit focus' : 'focus subgraph';
+    // Tabs: Used by / Uses, each a list of rows with the evidence line.
+    const tabs = el('div', 'tabs d-tabs');
+    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', 'Relations of this file');
+    const panel = el('div', 'tabpanel');
+    panel.setAttribute('role', 'tabpanel');
+    const tabDefs = [['usedby', 'Used by', usedBy], ['uses', 'Uses', uses]];
+    const tabButtons = tabDefs.map(([key, label, list]) => {
+      const b = el('button', state.tab === key ? 'on' : '', label);
+      b.type = 'button';
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-selected', String(state.tab === key));
+      b.append(el('span', 'n mono', fmt(list.length)));
+      b.addEventListener('click', () => { state.tab = key; renderDetails(id); });
+      return b;
+    });
+    tabs.append(...tabButtons);
+    if (state.tab === 'usedby') fillRefList(panel, usedBy, e => e.from, () => stemOf(n.id), 'No file references this one.');
+    else fillRefList(panel, uses, e => e.to, e => stemOf(e.to), 'It references no other file.');
+    scroll.append(tabs, panel);
+
+    const actions = el('div', 'd-actions');
+    const focusBtn = el('button', 'btn primary', state.focusId === id ? 'Exit focus' : 'Focus on this file');
+    focusBtn.type = 'button';
+    focusBtn.title = `Show only files within ${state.focusDepth} steps (${FOCUS_DIR_LABEL[state.focusDir]}); set under Filters › Focus`;
     focusBtn.addEventListener('click', () => {
       state.focusId = state.focusId === id ? null : id;
       setGraphData(buildGraphData());
       renderDetails(id);
       syncHash();
+      if (state.focusId) setTimeout(() => fg.zoomToFit(400, 60), 400);
     });
-    const copyBtn = document.createElement('button');
-    copyBtn.textContent = 'copy path';
-    copyBtn.addEventListener('click', () => navigator.clipboard?.writeText(n.id));
+    const copyBtn = el('button', 'btn', 'Copy path');
+    copyBtn.type = 'button';
+    copyBtn.addEventListener('click', () => flash(copyBtn, n.id, 'Copy path'));
     // The panel already holds exactly what an agent needs before an edit; this
     // hands it over in one click instead of a screenshot or five greps.
-    const contextBtn = document.createElement('button');
-    contextBtn.textContent = 'copy as context';
-    contextBtn.addEventListener('click', () => {
-      navigator.clipboard?.writeText(contextMarkdown(n, usedBy, uses));
-      contextBtn.textContent = 'copied ✓';
-      setTimeout(() => { contextBtn.textContent = 'copy as context'; }, 1200);
-    });
+    const contextBtn = el('button', 'btn', 'Copy as context');
+    contextBtn.type = 'button';
+    contextBtn.title = 'Markdown summary of this file and its relations, for a coding agent';
+    contextBtn.addEventListener('click', () => flash(contextBtn, contextMarkdown(n, usedBy, uses), 'Copy as context'));
     actions.append(focusBtn, copyBtn, contextBtn);
-    body.appendChild(actions);
 
-    document.getElementById('details').classList.remove('closed');
+    body.append(head, scroll, actions);
+  }
+
+  function flash(btn, text, label) {
+    navigator.clipboard?.writeText(text);
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = label; }, 1200);
+  }
+
+  // What a change to this file reaches: risk, the transitive dependents split
+  // by type (the impact bar), and any defect that sits on this file itself.
+  function impactSection(n, uses) {
+    const sec = el('section', 'impact');
+    sec.setAttribute('aria-label', 'Impact');
+    const head = el('div', 'impact-head');
+    const p = el('p');
+
+    if (n.missing) {
+      head.append(icon(ICON.warn, 'crit'), el('strong', '', 'Missing file'), el('span', 'dim3', `· ${plural(n.in, 'file')} reference it`));
+      p.textContent = 'Each row under Used by is a line that points at a file that is not on disk.';
+      sec.append(head, p);
+      return sec;
+    }
+
+    const riskIcon = { high: icon(ICON.warn, 'crit'), medium: icon(ICON.warn, 'warn'), low: icon(ICON.ok, 'low') }[n.risk] ?? icon(ICON.ok, 'low');
+    const why = n.risk === 'high' && n.entrypoint && n.in < 10 ? '· entrypoint'
+      : n.risk === 'high' ? `· ${plural(n.in, 'direct dependent')}, limit 10`
+      : `· ${plural(n.in, 'direct dependent')}`;
+    head.append(riskIcon, el('strong', '', `${cap(n.risk)} risk`), el('span', 'dim3', why));
+    sec.append(head);
+
+    const affected = transitiveDependents(n.id);
+    const direct = new Set(state.incoming.get(n.id) ?? []);
+    direct.delete(n.id);
+    const indirect = affected.size - direct.size;
+    if (!affected.size) {
+      p.textContent = 'Nothing references it, so changing it affects no other file.';
+      sec.append(p);
+    } else {
+      p.append('Changing it can affect ', el('b', '', plural(affected.size, 'file')),
+        indirect > 0 ? `, ${fmt(indirect)} of them through another file.` : ', all of them directly.');
+      const byType = {};
+      for (const id of affected) {
+        const t = state.nodesById.get(id)?.type ?? 'unknown';
+        byType[t] = (byType[t] ?? 0) + 1;
+      }
+      const groups = Object.entries(byType).sort((a, b) => b[1] - a[1]);
+      const bar = el('div', 'ibar');
+      bar.setAttribute('role', 'img');
+      bar.setAttribute('aria-label', `${plural(affected.size, 'affected file')}: ${groups.map(([t, c]) => `${c} ${t}`).join(', ')}`);
+      const legend = el('div', 'ilegend');
+      for (const [t, c] of groups) {
+        const seg = el('span');
+        seg.style.flex = String(c);
+        seg.style.background = colorForType(t);
+        seg.dataset.swatchType = t;
+        bar.append(seg);
+        const item = el('span');
+        item.append(swatch(colorForType(t), t), `${t} `, el('span', 'mono', fmt(c)));
+        legend.append(item);
+      }
+      sec.append(p, bar, legend);
+    }
+
+    const notes = el('div', 'notes');
+    if (state.cycles.nodes.has(n.id)) {
+      notes.append(refRow({ mark: MARK.cycle(), label: el('span', '', 'Part of a dependency cycle'), rel: 'issues', onClick: () => openIssues('cycles') }));
+    }
+    if (n.deadExports?.length) {
+      notes.append(refRow({ mark: MARK.unused(), label: el('span', '', `Unused exports: ${n.deadExports.join(', ')}`) }));
+    }
+    for (const e of uses.filter(e => state.nodesById.get(e.to)?.missing).slice(0, 3)) {
+      const label = el('span');
+      label.append(`Line ${e.line} points to `, el('span', 'mono', e.to), ', which is not on disk');
+      notes.append(refRow({ mark: MARK.missing(), label, onClick: () => selectNode(e.to) }));
+    }
+    if (notes.childElementCount) sec.append(notes);
+    return sec;
+  }
+
+  const LIST_SHOWN = 5;
+  const LIST_WITH_SOURCE = 3;
+
+  // The first three rows carry the source line; the rest give the line number
+  // only, so a list of 40 stays scannable.
+  function fillRefList(panel, list, otherIdFn, markNameFn, emptyText) {
+    if (!list.length) { panel.append(el('div', 'empty', emptyText)); return; }
+    const row = (e, i) => {
+      const other = otherIdFn(e);
+      const missing = !!state.nodesById.get(other)?.missing;
+      const withSrc = i < LIST_WITH_SOURCE && e.raw;
+      return refRow({
+        id: other,
+        mark: markFor(other),
+        rel: missing ? `missing · ${e.line}` : withSrc ? e.rel : `${e.rel} · ${e.line}`,
+        relClass: missing ? 'crit' : '',
+        src: withSrc ? { line: e.line, raw: e.raw, mark: markNameFn(e) } : null,
+        onClick: () => selectNode(other),
+      });
+    };
+    list.slice(0, LIST_SHOWN).forEach((e, i) => panel.append(row(e, i)));
+    if (list.length > LIST_SHOWN) {
+      const more = el('button', 'btn quiet more', `Show ${fmt(list.length - LIST_SHOWN)} more`);
+      more.type = 'button';
+      more.addEventListener('click', () => {
+        more.remove();
+        list.slice(LIST_SHOWN).forEach((e, i) => panel.append(row(e, i + LIST_SHOWN)));
+      });
+      panel.append(more);
+    }
+  }
+
+  function edgeBetween(a, b) {
+    return state.graph.edges.find(e => e.from === a && e.to === b);
+  }
+
+  function renderPathDetails() {
+    const body = document.getElementById('details-body');
+    body.replaceChildren();
+    const from = state.selected, to = state.pathTarget;
+
+    if (!state.path) {
+      const head = detailsHead('', 'No path', clearPath, 'Clear path (Esc)');
+      head.classList.add('ruled');
+      const sub = el('div', 'd-meta');
+      sub.append(`${fileOf(from)} and ${fileOf(to)} do not reach each other in either direction.`);
+      head.append(sub);
+      const actions = el('div', 'd-actions');
+      const sel = el('button', 'btn', `Select ${fileOf(to)}`);
+      sel.type = 'button';
+      sel.addEventListener('click', () => selectNode(to));
+      const back = el('button', 'btn', `Back to ${fileOf(from)}`);
+      back.type = 'button';
+      back.addEventListener('click', clearPath);
+      actions.append(sel, back);
+      body.append(head, el('div', 'd-scroll'), actions);
+      return;
+    }
+
+    const order = state.path.order;
+    const hops = order.length - 1;
+    const head = detailsHead('', `${fileOf(order[0])} → ${fileOf(order.at(-1))}`, clearPath, 'Clear path (Esc)');
+    head.classList.add('ruled');
+    const sub = el('div', 'd-meta', `Shortest path, ${plural(hops, 'hop')}. Each step is the line that makes the link.`);
+    head.append(sub);
+
+    const ol = el('ol', 'path-steps');
+    order.forEach((id, i) => {
+      const last = i === order.length - 1;
+      const li = el('li');
+      const rail = el('span', 'rail');
+      rail.append(el('span', `dot ${i === 0 || last ? 'end' : ''}`));
+      if (!last) rail.append(el('span', 'bar'));
+      const step = el('div', 'step');
+      step.title = id;
+      const n = state.nodesById.get(id);
+      const top = el('div', 'top');
+      top.style.display = 'flex';
+      top.style.alignItems = 'baseline';
+      top.style.gap = '6px';
+      top.append(el('span', 'name', fileOf(id)), el('span', 'dim3 small', `${dirOf(id)}${n?.risk === 'high' ? ' · high risk' : ''}${n?.missing ? ' · missing' : ''}`));
+      step.append(top);
+      if (!last) {
+        const e = edgeBetween(id, order[i + 1]);
+        if (e) {
+          step.append(el('div', 'rel', e.rel));
+          if (e.raw) step.append(srcLine(e.line, e.raw, stemOf(order[i + 1])));
+        }
+      }
+      step.addEventListener('click', () => selectNode(id));
+      li.append(rail, step);
+      ol.append(li);
+    });
+
+    const actions = el('div', 'd-actions');
+    const sel = el('button', 'btn', `Select ${fileOf(to)}`);
+    sel.type = 'button';
+    sel.addEventListener('click', () => selectNode(to));
+    const copy = el('button', 'btn', 'Copy path as text');
+    copy.type = 'button';
+    copy.addEventListener('click', () => flash(copy, order.join(' → '), 'Copy path as text'));
+    actions.append(sel, copy);
+
+    body.append(head, ol, actions);
+  }
+
+  function renderPathBanner() {
+    const banner = document.getElementById('path-banner');
+    banner.hidden = !state.pathTarget;
+    if (state.pathTarget) {
+      const steps = document.getElementById('path-steps');
+      const hops = document.getElementById('path-hops');
+      if (state.path) {
+        steps.textContent = state.path.order.map(fileOf).join(' → ');
+        hops.textContent = plural(state.path.order.length - 1, 'hop');
+      } else {
+        steps.textContent = `No path between ${fileOf(state.selected)} and ${fileOf(state.pathTarget)}`;
+        hops.textContent = '';
+      }
+    }
+    renderPerfBanner();
   }
 
   function contextMarkdown(n, usedBy, uses) {
@@ -956,103 +1533,81 @@
     return lines.join('\n') + '\n';
   }
 
-  function appendRefList(body, title, list, otherIdFn) {
-    const t = document.createElement('div');
-    t.className = 'section-title';
-    t.textContent = title;
-    body.appendChild(t);
+  // ── Status bar ───────────────────────────────────────────────────────────
 
-    const shown = list.slice(0, 5);
-    shown.forEach((e, i) => {
-      const item = document.createElement('div');
-      item.className = 'ref-item';
-      const file = document.createElement('div');
-      file.className = 'ref-file';
-      file.textContent = otherIdFn(e);
-      const meta = document.createElement('div');
-      meta.className = 'ref-meta';
-      meta.textContent = `${e.rel} · line ${e.line}`;
-      item.append(file, meta);
-      if (i < 3) {
-        const raw = document.createElement('div');
-        raw.className = 'ref-raw';
-        raw.textContent = e.raw;
-        item.appendChild(raw);
-      }
-      item.addEventListener('click', () => selectNode(otherIdFn(e)));
-      body.appendChild(item);
-    });
-
-    if (list.length > 5) {
-      const more = document.createElement('button');
-      more.className = 'more-btn';
-      more.textContent = `… show ${list.length - 5} more`;
-      more.addEventListener('click', () => {
-        more.remove();
-        list.slice(5).forEach(e => {
-          const item = document.createElement('div');
-          item.className = 'ref-item';
-          const file = document.createElement('div');
-          file.className = 'ref-file';
-          file.textContent = otherIdFn(e);
-          const meta = document.createElement('div');
-          meta.className = 'ref-meta';
-          meta.textContent = `${e.rel} · line ${e.line}`;
-          item.append(file, meta);
-          item.addEventListener('click', () => selectNode(otherIdFn(e)));
-          body.appendChild(item);
-        });
-      });
-      body.appendChild(more);
-    }
+  function issueCounts() {
+    const g = state.graph;
+    return {
+      cycles: state.cycles.list.length,
+      missing: g.nodes.filter(n => n.missing).length,
+      unresolved: (g.unresolved ?? []).length,
+      unused: g.nodes.filter(n => n.deadExports?.length).length,
+      duplicates: (g.duplicates ?? []).length,
+    };
   }
 
-  function closeDetails() {
-    document.getElementById('details-body').innerHTML = '<p class="hint">Click a node to see its details.</p>';
+  function issueSummary(c) {
+    return [
+      c.cycles && plural(c.cycles, 'cycle'),
+      c.missing && `${fmt(c.missing)} missing`,
+      c.unresolved && `${fmt(c.unresolved)} unresolved`,
+      c.unused && plural(c.unused, 'unused export'),
+      c.duplicates && plural(c.duplicates, 'duplicate'),
+    ].filter(Boolean).join(' · ');
   }
 
   function updateStatusBar() {
     const mid = document.getElementById('status-mid');
-    const right = document.getElementById('status-right');
-    const orphans = state.graph.stats.orphans;
-    const unresolved = state.graph.stats.unresolved;
-    mid.textContent = `${orphans} orphans · ${unresolved} unresolved`;
-    const scanned = new Date(state.graph.scannedAt);
-    right.textContent = `scanned ${timeAgo(scanned)}`;
-
-    const issuesBtn = document.getElementById('issues-btn');
-    const deadFiles = state.graph.nodes.filter(n => n.deadExports?.length).length;
-    const dupes = (state.graph.duplicates ?? []).length;
-    issuesBtn.textContent = `⚠ ${unresolved + state.cycles.list.length + deadFiles + dupes} issues`;
-
+    const g = state.graph;
+    mid.replaceChildren(`${plural(g.stats?.orphans ?? 0, 'orphan')} · ${fmt(g.stats?.unresolved ?? 0)} unresolved`);
     if (state.selected) {
       const n = state.nodesById.get(state.selected);
-      if (n) mid.textContent = `${n.id.split('/').pop()} · ${n.in} in · ${n.out} out`;
+      if (n) mid.replaceChildren(el('b', '', fileOf(n.id)), ` · ${fmt(n.in)} in · ${fmt(n.out)} out`);
     }
     if (state.pathTarget) {
-      const to = state.pathTarget.split('/').pop();
-      const from = (state.selected ?? '').split('/').pop();
-      mid.textContent = state.path
-        ? `path ${from} → ${to} · ${state.path.order.length - 1} hops`
-        : `no path between ${from} and ${to}`;
+      mid.replaceChildren();
+      if (state.path) mid.append('Path ', el('b', '', `${fileOf(state.path.order[0])} → ${fileOf(state.path.order.at(-1))}`), ` · ${plural(state.path.order.length - 1, 'hop')}`);
+      else mid.append(`No path between ${fileOf(state.selected)} and ${fileOf(state.pathTarget)}`);
     }
+    document.getElementById('status-right').textContent = `Scanned ${timeAgo(new Date(g.scannedAt))}`;
+
+    const counts = issueCounts();
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    const btn = document.getElementById('issues-btn');
+    btn.replaceChildren(icon(total ? ICON.warn : ICON.ok), total ? plural(total, 'issue') : 'No issues');
+    btn.classList.toggle('clean', !total);
+    btn.title = total ? `${issueSummary(counts)} (I)` : 'Issues (I)';
+  }
+
+  function timeAgo(date) {
+    const min = Math.floor((Date.now() - date.getTime()) / 60000);
+    if (!Number.isFinite(min)) return '';
+    if (min < 1) return 'just now';
+    if (min < 60) return `${min} min ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 48) return `${hr} h ago`;
+    return `${Math.floor(hr / 24)} days ago`;
   }
 
   // ── Issues panel ─────────────────────────────────────────────────────────
 
   // Everything the scan already knows is wrong: references it could not
-  // resolve, cycles it proved, and files it could not read. All of it was in
-  // graph.json and none of it was ever shown.
+  // resolve, cycles it proved, and files it could not read.
   function openIssues(scrollTo) {
     const panel = document.getElementById('issues');
     panel.hidden = false;
+    document.getElementById('issues-btn').setAttribute('aria-pressed', 'true');
     renderIssues();
     if (scrollTo) document.getElementById(`issues-${scrollTo}`)?.scrollIntoView({ block: 'start' });
   }
 
+  function closeIssues() {
+    document.getElementById('issues').hidden = true;
+    document.getElementById('issues-btn').setAttribute('aria-pressed', 'false');
+  }
+
   function toggleIssues() {
-    const panel = document.getElementById('issues');
-    if (panel.hidden) openIssues(); else panel.hidden = true;
+    if (document.getElementById('issues').hidden) openIssues(); else closeIssues();
   }
 
   const ISSUE_LIMIT = 100;
@@ -1060,121 +1615,100 @@
   function renderIssues() {
     const body = document.getElementById('issues-body');
     body.replaceChildren();
+    const g = state.graph;
+    const counts = issueCounts();
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    document.getElementById('issues-count').textContent = fmt(total);
+    document.getElementById('issues-summary').textContent = issueSummary(counts);
 
-    const cycles = state.cycles.list;
-    if (cycles.length) {
-      body.appendChild(heading('issues-cycles', `Cycles (${cycles.length})`));
-      cycles.forEach(files => {
-        const row = document.createElement('div');
-        row.className = 'issue cycle';
-        row.textContent = files.map(f => f.split('/').pop()).join(' → ');
-        row.title = files.join(' → ');
-        row.addEventListener('click', () => selectNode(files[0]));
-        body.appendChild(row);
-      });
-    }
+    const section = (id, title, extra) => {
+      const h = el('h3', 'h', title);
+      h.id = id;
+      if (extra) h.append(el('span', 'dim3', ` ${extra}`));
+      body.append(h);
+    };
+    const more = (n) => { if (n > ISSUE_LIMIT) body.append(el('div', 'empty', `… and ${fmt(n - ISSUE_LIMIT)} more in graph.json`)); };
 
-    const duplicates = state.graph.duplicates ?? [];
-    if (duplicates.length) {
-      body.appendChild(heading('issues-duplicates', `Duplicate files (${duplicates.length})`));
-      for (const group of duplicates.slice(0, ISSUE_LIMIT)) {
-        const row = document.createElement('div');
-        row.className = 'issue';
-        const head = document.createElement('div');
-        head.textContent = group.map(f => f.split('/').pop()).join(' = ');
-        const meta = document.createElement('div');
-        meta.className = 'meta';
-        meta.textContent = group.join('  ·  ');
-        row.append(head, meta);
-        row.addEventListener('click', () => selectNode(group[0]));
-        body.appendChild(row);
+    if (state.cycles.list.length) {
+      section('issues-cycles', 'Cycles');
+      for (const files of state.cycles.list) {
+        const r = refRow({ mark: MARK.cycle(), label: el('span', 'chain', files.map(fileOf).join(' → ')), onClick: () => selectNode(files[0]) });
+        r.title = files.join(' → ');
+        body.append(r);
       }
     }
 
-    const dead = state.graph.nodes.filter(n => n.deadExports?.length);
-    if (dead.length) {
-      body.appendChild(heading('issues-dead', `Unused exports (${dead.length} files)`));
-      for (const n of dead.slice(0, ISSUE_LIMIT)) {
-        const row = document.createElement('div');
-        row.className = 'issue';
-        const head = document.createElement('div');
-        head.textContent = n.id;
-        const meta = document.createElement('div');
-        meta.className = 'meta';
-        meta.textContent = n.deadExports.join(', ');
-        row.append(head, meta);
-        row.addEventListener('click', () => selectNode(n.id));
-        body.appendChild(row);
+    const missing = g.nodes.filter(n => n.missing);
+    if (missing.length) {
+      section('issues-missing', 'Missing files');
+      for (const n of missing.slice(0, ISSUE_LIMIT)) {
+        const ref = edgeTo(n.id);
+        body.append(refRow({ id: n.id, mark: MARK.missing(), rel: ref ? `${fileOf(ref.from)}:${ref.line}` : '', onClick: () => selectNode(n.id) }));
       }
+      more(missing.length);
     }
 
-    const unresolved = state.graph.unresolved ?? [];
+    const unresolved = g.unresolved ?? [];
     if (unresolved.length) {
       const byReason = {};
       for (const u of unresolved) byReason[u.reason] = (byReason[u.reason] ?? 0) + 1;
-      const summary = Object.entries(byReason).map(([r, n]) => `${n} ${r}`).join(' · ');
-      body.appendChild(heading('issues-unresolved', `Unresolved (${unresolved.length}) — ${summary}`));
+      section('issues-unresolved', 'Unresolved', Object.entries(byReason).map(([r, n]) => `${n} ${r}`).join(' · '));
       // Anything the scan could not point at a file is here; past a hundred
       // rows the list stops being read and starts being scrolled.
       for (const u of unresolved.slice(0, ISSUE_LIMIT)) {
-        const row = document.createElement('div');
-        row.className = 'issue';
-        const head = document.createElement('div');
-        head.textContent = u.raw || u.rel;
-        const meta = document.createElement('div');
-        meta.className = 'meta';
-        meta.textContent = `${u.from}:${u.line} · ${u.rel} · ${u.reason} — ${u.hint}`;
-        row.append(head, meta);
-        row.addEventListener('click', () => selectNode(u.from));
-        body.appendChild(row);
+        const r = refRow({
+          label: el('span', 'chain', `${fileOf(u.from)}:${u.line}`),
+          rel: `${u.rel} · ${u.reason}`,
+          src: u.raw ? { line: u.line, raw: u.raw } : null,
+          onClick: () => selectNode(u.from),
+        });
+        r.title = u.from;
+        if (u.hint) r.append(el('span', 'note', u.hint));
+        body.append(r);
       }
-      if (unresolved.length > ISSUE_LIMIT) {
-        const more = document.createElement('div');
-        more.className = 'empty';
-        more.textContent = `… and ${unresolved.length - ISSUE_LIMIT} more in graph.json`;
-        body.appendChild(more);
-      }
+      more(unresolved.length);
     }
 
-    const warnings = (state.graph.warnings ?? []).filter(w => w.code !== 'cycle');
-    if (warnings.length) {
-      body.appendChild(heading('issues-warnings', `Warnings (${warnings.length})`));
-      for (const w of warnings) {
-        const row = document.createElement('div');
-        row.className = 'issue';
-        const head = document.createElement('div');
-        head.textContent = w.file || '(project)';
-        const meta = document.createElement('div');
-        meta.className = 'meta';
-        meta.textContent = `${w.code} — ${w.message}`;
-        row.append(head, meta);
-        if (w.file) row.addEventListener('click', () => selectNode(w.file));
-        body.appendChild(row);
+    const dead = g.nodes.filter(n => n.deadExports?.length);
+    if (dead.length) {
+      section('issues-dead', 'Unused exports');
+      for (const n of dead.slice(0, ISSUE_LIMIT)) {
+        const r = refRow({ id: n.id, mark: swatch(colorForNode(n)), onClick: () => selectNode(n.id) });
+        r.append(el('span', 'sub', n.deadExports.join(', ')));
+        body.append(r);
       }
+      more(dead.length);
+    }
+
+    const duplicates = g.duplicates ?? [];
+    if (duplicates.length) {
+      section('issues-duplicates', 'Duplicate files');
+      for (const group of duplicates.slice(0, ISSUE_LIMIT)) {
+        const r = refRow({ label: el('span', 'chain', group.map(fileOf).join(' = ')), onClick: () => selectNode(group[0]) });
+        r.append(el('span', 'note', group.join('  ·  ')));
+        body.append(r);
+      }
+      more(duplicates.length);
+    }
+
+    const warnings = (g.warnings ?? []).filter(w => w.code !== 'cycle');
+    if (warnings.length) {
+      section('issues-warnings', 'Warnings');
+      for (const w of warnings.slice(0, ISSUE_LIMIT)) {
+        const r = refRow({ label: el('span', 'file', w.file || '(project)'), rel: w.code, onClick: w.file ? () => selectNode(w.file) : null });
+        r.append(el('span', 'note', w.message));
+        body.append(r);
+      }
+      more(warnings.length);
     }
 
     if (!body.childElementCount) {
-      const ok = document.createElement('div');
-      ok.className = 'empty';
-      ok.textContent = 'Nothing unresolved, no cycles, no duplicates, no unused exports.';
-      body.appendChild(ok);
+      body.append(el('div', 'empty', 'Nothing unresolved, no cycles, no missing files, no duplicates, no unused exports.'));
     }
   }
 
-  function heading(id, text) {
-    const h = document.createElement('h4');
-    h.id = id;
-    h.textContent = text;
-    return h;
-  }
-
-  function timeAgo(date) {
-    const ms = Date.now() - date.getTime();
-    const min = Math.floor(ms / 60000);
-    if (min < 1) return 'just now';
-    if (min < 60) return `${min}m ago`;
-    const hr = Math.floor(min / 60);
-    return `${hr}h ago`;
+  function edgeTo(id) {
+    return state.graph.edges.find(e => e.to === id);
   }
 
   function applyFilters() {
@@ -1182,89 +1716,172 @@
     refreshHighlight();
   }
 
+  // ── Search ───────────────────────────────────────────────────────────────
+
   const SEARCH_LIMIT = 20;
+  let searchMatches = [];
 
   // Jumping straight to the first match was wrong more often than right: with
   // ten files called index.ts, the one you want is rarely the alphabetically
-  // first. Show the matches and let the click decide.
+  // first. Show the matches and let the keyboard or the click decide.
   function doSearch(q) {
     state.search = q.trim().toLowerCase();
+    state.searchActive = 0;
     const box = document.getElementById('search-results');
+    const input = document.getElementById('search');
     box.replaceChildren();
-    if (!state.search) { box.hidden = true; return; }
+    if (!state.search) { box.hidden = true; input.setAttribute('aria-expanded', 'false'); return; }
 
-    const matches = state.graph.nodes
+    searchMatches = state.graph.nodes
       .filter(n => n.id.toLowerCase().includes(state.search))
       .sort((a, b) => b.in - a.in || (a.id < b.id ? -1 : 1));
 
     box.hidden = false;
-    if (!matches.length) {
-      const none = document.createElement('div');
-      none.className = 'none';
-      none.textContent = 'no match';
-      box.appendChild(none);
+    input.setAttribute('aria-expanded', 'true');
+    if (!searchMatches.length) {
+      box.append(el('div', 'none', `No file path contains ‘${q.trim()}’.`));
       return;
     }
-    for (const n of matches.slice(0, SEARCH_LIMIT)) {
-      const row = document.createElement('div');
-      row.textContent = n.id;
-      row.title = `${n.in} dependents`;
-      row.addEventListener('mousedown', (e) => {
+    searchMatches.slice(0, SEARCH_LIMIT).forEach((n, i) => {
+      const opt = el('div', 'opt');
+      opt.id = `search-opt-${i}`;
+      opt.setAttribute('role', 'option');
+      opt.title = n.id;
+      const name = el('span', 'name');
+      const file = fileOf(n.id);
+      const at = file.toLowerCase().indexOf(state.search);
+      if (at < 0) name.textContent = file;
+      else name.append(file.slice(0, at), el('b', '', file.slice(at, at + state.search.length)), file.slice(at + state.search.length));
+      opt.append(markFor(n.id), name, el('span', 'dir', dirOf(n.id)), el('span', 'n', i === 0 ? plural(n.in, 'dependent') : fmt(n.in)));
+      opt.addEventListener('mousedown', (e) => {
         e.preventDefault(); // keep focus so Escape still closes the list
-        selectNode(n.id);
-        box.hidden = true;
+        pickSearchResult(i);
       });
-      box.appendChild(row);
-    }
-    if (matches.length > SEARCH_LIMIT) {
-      const more = document.createElement('div');
-      more.className = 'none';
-      more.textContent = `… ${matches.length - SEARCH_LIMIT} more`;
-      box.appendChild(more);
-    }
+      opt.addEventListener('mousemove', () => { if (state.searchActive !== i) { state.searchActive = i; syncSearchActive(); } });
+      box.append(opt);
+    });
+    const foot = el('div', 'foot');
+    if (searchMatches.length > SEARCH_LIMIT) foot.append(el('span', '', `${fmt(searchMatches.length - SEARCH_LIMIT)} more`));
+    const keys = el('span', 'keys');
+    keys.append(el('span', 'kbd', '↑'), ' ', el('span', 'kbd', '↓'), ' move  ', el('span', 'kbd', '↵'), ' select');
+    foot.append(keys);
+    box.append(foot);
+    syncSearchActive();
   }
 
-  function pickFirstSearchResult() {
-    const first = document.getElementById('search-results').querySelector('div:not(.none)');
-    if (first) first.dispatchEvent(new MouseEvent('mousedown'));
+  function syncSearchActive() {
+    const opts = document.getElementById('search-results').querySelectorAll('.opt');
+    opts.forEach((o, i) => {
+      o.classList.toggle('active', i === state.searchActive);
+      o.setAttribute('aria-selected', String(i === state.searchActive));
+    });
+    opts[state.searchActive]?.scrollIntoView({ block: 'nearest' });
+    document.getElementById('search').setAttribute('aria-activedescendant', opts.length ? `search-opt-${state.searchActive}` : '');
   }
+
+  function pickSearchResult(i) {
+    const n = searchMatches[i];
+    if (!n) return;
+    document.getElementById('search-results').hidden = true;
+    const input = document.getElementById('search');
+    input.setAttribute('aria-expanded', 'false');
+    input.blur();
+    selectNode(n.id);
+    centerOn(n.id);
+  }
+
+  function centerOn(id) {
+    const node = fg.graphData().nodes.find(x => x.id === id);
+    if (node && Number.isFinite(node.x)) fg.centerAt(node.x, node.y, 400);
+  }
+
+  // ── Banners ──────────────────────────────────────────────────────────────
 
   function checkPerfBanner() {
-    const n = state.graph.nodes.length;
-    const banner = document.getElementById('perf-banner');
-    if (n > 5000) {
-      banner.textContent = 'graph is large, enable filters to improve performance';
-      banner.hidden = false;
-      state.typeFilters.delete('asset');
-    } else if (n > 2000) {
-      banner.textContent = 'large graph: labels limited to high in-degree nodes, particles disabled';
-      banner.hidden = false;
-    }
+    if (state.graph.nodes.length > 5000) state.typeFilters.delete('asset');
   }
+
+  function renderPerfBanner() {
+    const banner = document.getElementById('perf-banner');
+    if (banner.dataset.sticky) return;
+    const n = state.graph.nodes.length;
+    // One banner at a time over the top of the canvas: a traced path wins.
+    if (n <= 2000 || state.perfDismissed || state.pathTarget) { banner.hidden = true; return; }
+    const text = document.getElementById('perf-text');
+    text.replaceChildren(el('b', '', plural(n, 'file')),
+      state.groupBy ? ' — opened grouped by folder.' : ' —',
+      ' Labels show only on files with 10+ dependents.',
+      n > 5000 ? ' Asset files are hidden.' : '');
+    document.getElementById('perf-ungroup').hidden = !state.groupBy;
+    banner.hidden = false;
+  }
+
+  // A banner that outranks everything else, e.g. "reloading".
+  function showBanner(message) {
+    const banner = document.getElementById('perf-banner');
+    banner.dataset.sticky = '1';
+    document.getElementById('perf-text').textContent = message;
+    document.getElementById('perf-ungroup').hidden = true;
+    document.getElementById('path-banner').hidden = true;
+    banner.hidden = false;
+  }
+
+  // ── Wiring ───────────────────────────────────────────────────────────────
 
   const COLOR_MODES = ['type', 'language', 'directory', 'risk'];
 
   function wireTopLevelUI() {
     const search = document.getElementById('search');
     const results = document.getElementById('search-results');
+    const searchKbd = document.getElementById('search-kbd');
     search.addEventListener('input', () => doSearch(search.value));
+    search.addEventListener('focus', () => { searchKbd.textContent = 'Esc'; if (search.value.trim()) doSearch(search.value); });
+    search.addEventListener('blur', () => { searchKbd.textContent = '/'; results.hidden = true; search.setAttribute('aria-expanded', 'false'); });
     search.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') pickFirstSearchResult();
-      if (e.key === 'Escape') results.hidden = true;
+      const count = Math.min(searchMatches.length, SEARCH_LIMIT);
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!count || results.hidden) return;
+        state.searchActive = (state.searchActive + (e.key === 'ArrowDown' ? 1 : -1) + count) % count;
+        syncSearchActive();
+      } else if (e.key === 'Enter') {
+        if (!results.hidden) pickSearchResult(state.searchActive);
+      } else if (e.key === 'Escape') {
+        results.hidden = true;
+      }
     });
 
-    document.getElementById('details-close').addEventListener('click', clearSelection);
     document.getElementById('refresh-btn').addEventListener('click', () => location.reload());
-    document.getElementById('filters-toggle').addEventListener('click', () => {
-      document.getElementById('filters').classList.toggle('open');
+
+    const filters = document.getElementById('filters');
+    const toggle = document.getElementById('filters-toggle');
+    toggle.addEventListener('click', () => {
+      const open = filters.classList.toggle('open');
+      toggle.setAttribute('aria-expanded', String(open));
     });
 
-    document.getElementById('theme-btn').addEventListener('click', () => {
-      const next = { auto: 'dark', dark: 'light', light: 'auto' };
-      state.theme = next[state.theme];
-      savePersisted();
-      applyTheme();
+    for (const b of document.querySelectorAll('#theme-btn button')) {
+      b.addEventListener('click', () => {
+        state.theme = b.dataset.themeValue;
+        savePersisted();
+        applyTheme();
+      });
+    }
+    for (const b of document.querySelectorAll('#layout-seg button')) {
+      b.addEventListener('click', () => setMode(b.dataset.mode));
+    }
+
+    document.getElementById('zoom-in').addEventListener('click', () => fg.zoom(fg.zoom() * 1.4, 200));
+    document.getElementById('zoom-out').addEventListener('click', () => fg.zoom(fg.zoom() / 1.4, 200));
+    document.getElementById('zoom-fit').addEventListener('click', () => fg.zoomToFit(400, 40));
+
+    document.getElementById('path-clear').addEventListener('click', clearPath);
+    document.getElementById('perf-dismiss').addEventListener('click', () => {
+      state.perfDismissed = true;
+      delete document.getElementById('perf-banner').dataset.sticky;
+      renderPerfBanner();
     });
+    document.getElementById('perf-ungroup').addEventListener('click', () => setGroupBy(0));
 
     const help = document.getElementById('help');
     const toggleHelp = () => { help.hidden = !help.hidden; };
@@ -1272,38 +1889,43 @@
     help.addEventListener('click', () => { help.hidden = true; });
 
     document.getElementById('issues-btn').addEventListener('click', toggleIssues);
-    document.getElementById('issues-close').addEventListener('click', () => {
-      document.getElementById('issues').hidden = true;
-    });
+    document.getElementById('issues-close').addEventListener('click', closeIssues);
 
     window.addEventListener('keydown', (e) => {
-      if (e.target.tagName === 'INPUT') {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
         if (e.key === 'Escape') e.target.blur();
         return;
       }
-      if (e.key === '/' || (e.ctrlKey && e.key.toLowerCase() === 'k')) {
+      if (e.ctrlKey || e.metaKey || e.altKey) {
+        if (e.ctrlKey && e.key.toLowerCase() === 'k') { e.preventDefault(); search.focus(); }
+        return;
+      }
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      if (key === '/') {
         e.preventDefault();
         search.focus();
-      } else if (e.key === '?') {
+      } else if (key === '?') {
         toggleHelp();
-      } else if (e.key === 'Escape') {
+      } else if (key === 'Escape') {
         if (!help.hidden) help.hidden = true;
+        else if (filters.classList.contains('open')) { filters.classList.remove('open'); toggle.setAttribute('aria-expanded', 'false'); }
+        else if (state.pathTarget) clearPath();
         else clearSelection();
-      } else if (e.key === 'i') {
+      } else if (key === 'i') {
         toggleIssues();
-      } else if (e.key === 'c') {
+      } else if (key === 'c') {
         const next = COLOR_MODES[(COLOR_MODES.indexOf(state.colorBy) + 1) % COLOR_MODES.length];
         document.getElementById('color-by').value = next;
         setColorBy(next);
-      } else if (e.key === 'f') {
+      } else if (key === 'f') {
         fg.zoomToFit(400, 40);
-      } else if (e.key === 'g' || e.key === 't') {
-        state.mode = state.mode === 'galaxy' ? 'tree' : 'galaxy';
-        savePersisted();
-        applyMode();
+      } else if (key === 'g') {
+        setMode('galaxy');
+      } else if (key === 't') {
+        setMode('tree');
       }
     });
   }
 
-  main().catch(e => fatal(`could not load graph.json: ${e.message}`));
+  main().catch(e => showState('error', 'Could not load the graph', e.message));
 })();

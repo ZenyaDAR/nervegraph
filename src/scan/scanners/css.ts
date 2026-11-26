@@ -49,17 +49,20 @@ export function scanCss(file: { id: string; content: string }): ScannerResult {
   });
 
   root.walkDecls((decl) => {
-    const re = /url\(\s*(['"]?)([^'")]+)\1\s*\)/g;
+    // A quoted url is consumed whole: an inline SVG's own url(#clip) is not a file.
+    const re = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^'")]+?))\s*\)/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(decl.value))) {
       const line = decl.source?.start?.line ?? 0;
-      if (m[2].startsWith('data:')) continue;
-      if (/^(https?:)?\/\//.test(m[2])) {
-        refs.push({ rel: 'asset', target: m[2], line, raw: truncate(decl.toString()), literal: false, value: 'external' });
+      const url = (m[1] ?? m[2] ?? m[3]).trim();
+      // A template (Liquid, Django) or Sass interpolation names no one file.
+      if (url.startsWith('data:') || /\{[{%]|#\{/.test(url)) continue;
+      if (/^(https?:)?\/\//.test(url)) {
+        refs.push({ rel: 'asset', target: url, line, raw: truncate(decl.toString()), literal: false, value: 'external' });
         continue;
       }
       // `url(#gradient)` points into an SVG document, not at a file.
-      const target = cleanUrl(m[2]);
+      const target = cleanUrl(url);
       if (!target) continue;
       refs.push({ rel: 'asset', target, line, raw: truncate(decl.toString()), literal: true });
     }

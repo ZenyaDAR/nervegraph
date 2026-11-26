@@ -133,15 +133,28 @@ defines page structure. `py_import`/`rb_require` are ordinary code imports.
 Straight from the dataviz skill's neutral surface/ink roles — not invented
 per-project, so the whole app (not just the graph) reads as one system.
 
-| Role | Light | Dark |
-|---|---|---|
-| Page plane (topbar/panels/statusbar) | `#f9f9f7` | `#0d0d0d` |
-| Chart surface (graph canvas) | `#fcfcfb` | `#1a1a19` |
-| Primary ink (headings, node labels) | `#0b0b0b` | `#ffffff` |
-| Secondary ink (body text) | `#52514e` | `#c3c2b7` |
-| Muted ink (dim counts, hints) | `#898781` | `#898781` |
-| Border (hairline) | `rgba(11,11,11,0.10)` | `rgba(255,255,255,0.10)` |
-| Accent (focus, buttons, links) | `#2a78d6` (slot 1) | `#3987e5` (slot 1) |
+CSS variable names are in `viewer/app.css`. Colour belongs to data: chrome is
+grey, blue only marks selection, focus and a traced path, red only marks
+something broken.
+
+| Role | Variable | Light | Dark |
+|---|---|---|---|
+| Page plane (topbar/panels/statusbar) | `--ground` | `#f9f9f7` | `#0d0d0d` |
+| Chart surface (graph canvas) | `--canvas` | `#fcfcfb` | `#1a1a19` |
+| Floating surface (over the graph; the only thing with a shadow) | `--float` | `#ffffff` | `#1f1f1e` |
+| Primary ink (headings, body) | `--ink` | `#0b0b0b` | `#f2f1ec` |
+| Secondary ink | `--ink-2` | `#52514e` | `#c3c2b7` |
+| Muted ink (dim counts, directories, hints) | `--ink-3` | `#6b6964` | `#9a988f` |
+| Border (hairline) / strong border | `--line` / `--line-2` | `rgba(11,11,11,0.10)` / `0.22` | `rgba(255,255,255,0.10)` / `0.20` |
+| Accent (selection, focus, path, primary button) | `--accent` | `#2a78d6` (slot 1) | `#3987e5` (slot 1) |
+| Accent as text | `--accent-ink` | `#1d64b8` | `#6aa6ef` |
+| Critical as text | `--crit-ink` | `#b42a2a` | `#f07a7a` |
+| OK (watching, no issues) | `--ok` | `#008300` | `#1baf7a` |
+| Highlighted edge (selected file's relations) | `--edge-hi` | `#5d6678` | `#8c96ab` |
+
+Muted ink was `#898781` in both themes; light moved to `#6b6964` so 12px grey
+text passes 4.5:1 on the page plane. The status colours `#d03b3b` / `#fab219`
+are the same in both themes.
 
 ## Node label pill (canvas-drawn, see viewer/app.js)
 

@@ -121,6 +121,16 @@ export interface Graph {
   cycles: string[][];
   /** Groups of files with byte-identical content. */
   duplicates: string[][];
+  /** Non-default scan flags, so a re-scan (autoscan) covers the same files and writes the same format. */
+  scan?: ScanFlags;
+}
+
+export interface ScanFlags {
+  ignore?: string[];
+  noGitignore?: boolean;
+  noGit?: boolean;
+  classes?: boolean;
+  pretty?: boolean;
 }
 
 // Scanner-facing types: what a scanner returns for one file.
@@ -133,7 +143,18 @@ export interface RawRef {
   value?: string;
   /** Bindings this reference pulls in. `['*']` = all / unknowable. */
   names?: string[];
+  /** Section type a top-level JSON block sits in, to tell local blocks from theme blocks. */
+  section?: string;
 }
+
+/**
+ * Edge values for names that may or may not be a file: no file means no edge,
+ * never a missing node.
+ */
+export const OPTIONAL_VALUES = new Set(['theme_block', 'schema_block', 'section_api']);
+
+/** "May be placed / fetched here" edges: mutual nesting is normal, not a dependency cycle. */
+export const SOFT_VALUES = new Set(['schema_block', 'section_api']);
 
 export interface ScannerResult {
   refs: RawRef[];
@@ -141,6 +162,10 @@ export interface ScannerResult {
   classes?: string[];
   /** Custom element tag names this file registers via customElements.define. */
   defines?: string[];
+  /** Block types a section's own schema defines (not files in blocks/). */
+  localBlocks?: string[];
+  /** The schema has presets: a merchant can add it in the theme editor, so no file has to reference it. */
+  presets?: boolean;
 }
 
 export type Scanner = (file: { id: string; content: string }) => ScannerResult;

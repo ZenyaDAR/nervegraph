@@ -87,7 +87,9 @@ export function isEntrypoint(id: string, profile: Profile, pkg?: any): boolean {
   if (profile === 'shopify') {
     return /^layout\/.*\.liquid$/.test(id) ||
       /^templates\/.*\.(liquid|json)$/.test(id) ||
-      id === 'config/settings_schema.json' ||
+      /^config\/[^/]+\.json$/.test(id) ||
+      // Wrappers Shopify picks by name for top-level app and theme blocks.
+      /^sections\/(apps|_blocks)\.liquid$/.test(id) ||
       /^locales\/.*\.json$/.test(id);
   }
   if (pkg) {

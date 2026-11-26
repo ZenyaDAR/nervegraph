@@ -70,7 +70,7 @@ test('liquid: content_for blocks names no file; content_for block resolves its t
     '%}',
   ].join('\n');
   const { refs } = scanLiquid({ id: 'sections/x.liquid', content });
-  assert.deepEqual(refs.map(r => [r.rel, r.target, r.line]), [
+  assert.deepEqual(refs.map(r => [r.rel, r.target, r.line]).sort((a, b) => Number(a[2]) - Number(b[2])), [
     ['content_for', 'slide', 2],
     ['content_for', 'card', 7],
     ['asset_url', 'theme.js', 8],

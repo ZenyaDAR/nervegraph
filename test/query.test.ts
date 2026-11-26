@@ -61,7 +61,7 @@ async function capture(fn: () => Promise<number>): Promise<{ code: number; out: 
 const GRAPH = graphFile();
 
 test('the file card counts transitive dependents, not just direct ones', async () => {
-  const { code, out } = await capture(() => runQuery({ file: 'src/util.js', graph: GRAPH, json: true }));
+  const { code, out } = await capture(() => runQuery({ file: 'src/util.js', graph: GRAPH, noAutoscan: true, json: true }));
   assert.equal(code, 0);
   const card = JSON.parse(out);
   assert.equal(card.file, 'src/util.js');
@@ -73,53 +73,56 @@ test('the file card counts transitive dependents, not just direct ones', async (
 });
 
 test('--json prints nothing but JSON, so it is pipe-safe', async () => {
-  const { out } = await capture(() => runQuery({ file: 'src/a.js', graph: GRAPH, json: true }));
+  const { out } = await capture(() => runQuery({ file: 'src/a.js', graph: GRAPH, noAutoscan: true, json: true }));
   assert.doesNotThrow(() => JSON.parse(out));
 });
 
 test('--depth lists the neighbourhood', async () => {
-  const { out } = await capture(() => runQuery({ file: 'src/util.js', graph: GRAPH, json: true, depth: 2 }));
+  const { out } = await capture(() => runQuery({ file: 'src/util.js', graph: GRAPH, noAutoscan: true, json: true, depth: 2 }));
   assert.deepEqual(JSON.parse(out).neighbors, ['src/a.js', 'src/entry.js']);
 });
 
 test('list forms filter the node set', async () => {
-  const orphans = JSON.parse((await capture(() => runQuery({ graph: GRAPH, json: true, orphans: true }))).out);
+  const orphans = JSON.parse((await capture(() => runQuery({ graph: GRAPH, noAutoscan: true, json: true, orphans: true }))).out);
   assert.deepEqual(orphans.files.map((f: any) => f.file), ['src/dead.js']);
 
-  const missing = JSON.parse((await capture(() => runQuery({ graph: GRAPH, json: true, missing: true }))).out);
+  const missing = JSON.parse((await capture(() => runQuery({ graph: GRAPH, noAutoscan: true, json: true, missing: true }))).out);
   assert.deepEqual(missing.files.map((f: any) => f.file), ['src/gone.js']);
 
-  const high = JSON.parse((await capture(() => runQuery({ graph: GRAPH, json: true, risk: 'high' }))).out);
+  const high = JSON.parse((await capture(() => runQuery({ graph: GRAPH, noAutoscan: true, json: true, risk: 'high' }))).out);
   assert.deepEqual(high.files.map((f: any) => f.file), ['src/entry.js']);
 
-  const unresolved = JSON.parse((await capture(() => runQuery({ graph: GRAPH, json: true, unresolved: true }))).out);
-  assert.equal(unresolved.unresolved[0].reason, 'external');
+  // External references are counted, not listed, unless asked for.
+  const unresolved = JSON.parse((await capture(() => runQuery({ graph: GRAPH, noAutoscan: true, json: true, unresolved: true }))).out);
+  assert.deepEqual([unresolved.unresolved, unresolved.external], [[], 1]);
+  const all = JSON.parse((await capture(() => runQuery({ graph: GRAPH, noAutoscan: true, json: true, unresolved: true, all: true }))).out);
+  assert.equal(all.unresolved[0].reason, 'external');
 });
 
 test('a file outside the graph is an error, not an empty card', async () => {
-  const { code } = await capture(() => runQuery({ file: 'src/nope.js', graph: GRAPH, json: true }));
+  const { code } = await capture(() => runQuery({ file: 'src/nope.js', graph: GRAPH, noAutoscan: true, json: true }));
   assert.equal(code, 5);
 });
 
 test('a name resolves without its directory or its extension', async () => {
-  const byName = JSON.parse((await capture(() => runQuery({ file: 'dead.js', graph: GRAPH, json: true }))).out);
+  const byName = JSON.parse((await capture(() => runQuery({ file: 'dead.js', graph: GRAPH, noAutoscan: true, json: true }))).out);
   assert.equal(byName.file, 'src/dead.js');
 
-  const byStem = JSON.parse((await capture(() => runQuery({ file: 'dead', graph: GRAPH, json: true }))).out);
+  const byStem = JSON.parse((await capture(() => runQuery({ file: 'dead', graph: GRAPH, noAutoscan: true, json: true }))).out);
   assert.equal(byStem.file, 'src/dead.js');
 });
 
 test('an ambiguous name lists the candidates instead of guessing', async () => {
-  const { code } = await capture(() => runQuery({ file: 'util.js', graph: GRAPH, json: true }));
+  const { code } = await capture(() => runQuery({ file: 'util.js', graph: GRAPH, noAutoscan: true, json: true }));
   assert.equal(code, 2);
 });
 
 test('an exact path wins over a suffix match', async () => {
-  const card = JSON.parse((await capture(() => runQuery({ file: 'src/util.js', graph: GRAPH, json: true }))).out);
+  const card = JSON.parse((await capture(() => runQuery({ file: 'src/util.js', graph: GRAPH, noAutoscan: true, json: true }))).out);
   assert.equal(card.file, 'src/util.js');
 });
 
 test('a missing graph tells the caller to scan', async () => {
-  const { code } = await capture(() => runQuery({ file: 'a.js', graph: path.join(tmpdir(), 'no-such-graph.json') }));
-  assert.equal(code, 5);
+  // The CLI prints the message and exits 5 (GraphLoadError.exitCode).
+  await assert.rejects(() => capture(() => runQuery({ file: 'a.js', graph: path.join(tmpdir(), 'no-such-graph.json') })), (e: any) => e.exitCode === 5 && /run: nerve scan/.test(e.message));
 });

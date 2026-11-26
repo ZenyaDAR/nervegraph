@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { prevGraphPath, readGraph } from '../graph/io.ts';
+import { prevGraphPath, readGraph, resolveGraphPath } from '../graph/io.ts';
 import type { Graph } from '../graph/types.ts';
 
 // What changed between two scans. The graph is deterministic, so committing
@@ -64,7 +64,7 @@ export function diffGraphs(before: Graph, after: Graph): GraphDiff {
 }
 
 export async function runDiff(args: DiffArgs): Promise<number> {
-  const afterPath = path.resolve(args.after ?? '.nervegraph/graph.json');
+  const afterPath = resolveGraphPath(args.after);
   // No arguments: what the last re-scan changed (scan keeps the one before it).
   const beforePath = args.before ? path.resolve(args.before) : prevGraphPath(afterPath);
   for (const p of [beforePath, afterPath]) {

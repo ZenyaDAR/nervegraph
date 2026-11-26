@@ -1,4 +1,5 @@
 import { writeFile, rename, mkdir, readFile, copyFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { Graph } from './types.ts';
 import { SCHEMA_VERSION } from './types.ts';
@@ -22,6 +23,35 @@ export async function writeGraphAtomic(outDir: string, graph: Graph, pretty = fa
   try { await copyFile(finalPath, prevGraphPath(finalPath)); } catch { /* first scan */ }
   await rename(tmpPath, finalPath);
   return Buffer.byteLength(content);
+}
+
+/**
+ * The graph a command reads: `--graph` when given, else the nearest
+ * `.nervegraph/graph.json` from `start` up to the repository root (a `.git`
+ * entry), so an agent that `cd`-ed into a subdirectory finds the project's
+ * graph — or, when there is none yet, gets the root's path to scan into.
+ * Outside a repository the nearest existing graph above still wins (a project
+ * without git, run from a subfolder); with none, `start`'s own path is
+ * returned, and isInRepository() tells the caller not to scan there unasked.
+ */
+export function resolveGraphPath(explicit?: string, start = process.cwd()): string {
+  if (explicit) return path.resolve(explicit);
+  const from = path.resolve(start);
+  let nearest: string | undefined;
+  for (let dir = from; ; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, '.nervegraph', 'graph.json');
+    nearest ??= existsSync(candidate) ? candidate : undefined;
+    if (existsSync(path.join(dir, '.git'))) return nearest ?? candidate;
+    if (path.dirname(dir) === dir) return nearest ?? path.join(from, '.nervegraph', 'graph.json');
+  }
+}
+
+/** True when `dir` is inside a repository (a `.git` entry in it or above). */
+export function isInRepository(dir: string): boolean {
+  for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+    if (existsSync(path.join(d, '.git'))) return true;
+    if (path.dirname(d) === d) return false;
+  }
 }
 
 /** Where the scan before the current one is kept, next to graph.json. */

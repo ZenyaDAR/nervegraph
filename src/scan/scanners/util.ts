@@ -5,10 +5,16 @@ import type { RawRef } from '../../graph/types.ts';
 
 const RAW_MAX = 120;
 
+// Where the previous lineAt() call stopped: scanners ask in file order, and
+// counting from 0 for every match is quadratic on a big file.
+let last = { content: '', index: 0, line: 1 };
+
 /** 1-based line number of a character offset. */
 export function lineAt(content: string, index: number): number {
-  let line = 1;
-  for (let i = 0; i < index; i++) if (content[i] === '\n') line++;
+  const from = last.content === content && last.index <= index ? last : { index: 0, line: 1 };
+  let line = from.line;
+  for (let i = from.index; i < index; i++) if (content[i] === '\n') line++;
+  last = { content, index, line };
   return line;
 }
 
@@ -38,9 +44,9 @@ const REGEX_PREFIX_WORDS = /\b(?:return|typeof|case|do|else|in|of|new|delete|voi
  * template literals blanked, quotes kept. Same length and line breaks as the
  * input, so a regex can run over the mask and read the real string back from
  * the original at the same offsets — `require('x')` inside a comment or a
- * string no longer becomes an edge.
+ * string no longer becomes an edge. `keepStrings` blanks the comments only.
  */
-export function maskJs(src: string): string {
+export function maskJs(src: string, keepStrings = false): string {
   const out = src.split('');
   const n = src.length;
   const blankRange = (from: number, to: number) => {
@@ -73,7 +79,7 @@ export function maskJs(src: string): string {
         else if (src[j] === '\n' && c !== '`') break; // unterminated: stop at the line end
         j++;
       }
-      blankRange(i + 1, Math.min(j, n));
+      if (!keepStrings) blankRange(i + 1, Math.min(j, n));
       i = j + 1;
       prev = c;
       continue;
@@ -88,7 +94,7 @@ export function maskJs(src: string): string {
         else if (src[j] === '/' && !inClass) break;
         j++;
       }
-      blankRange(i + 1, j);
+      if (!keepStrings) blankRange(i + 1, j);
       i = j + 1;
       prev = '/';
       continue;
@@ -112,6 +118,23 @@ function lastNonSpace(src: string, i: number): number {
 /** A URL that points outside the project: http(s), protocol-relative, data:, mailto:, #anchor. */
 export function isExternalUrl(target: string): boolean {
   return /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(target);
+}
+
+// Shopify's Section Rendering API names a section in a URL or a request body:
+// `?section_id=x`, `params.set('section_id', 'x')`, `data-section-id="x"`,
+// `QUICK_ADD_SECTION_ID = 'x'`, `?sections=a,b`.
+const SECTION_API_RE = /(?:section[_-]?id['"]?\s*[:=]|(?:set|append)\(\s*['"]section_id['"]\s*,)\s*(?:'([\w-]+)'|"([\w-]+)"|`([\w-]+)`)|[?&;"'`]section_id=([\w-]+)|[?&;"'`]sections=([\w,-]+)/gi;
+
+/** An id may equally be a dynamic instance id, so the resolver keeps only real section files. */
+export function sectionApiRefs(content: string): RawRef[] {
+  const refs: RawRef[] = [];
+  for (const m of content.matchAll(SECTION_API_RE)) {
+    const names = m[5] !== undefined ? m[5].split(',') : [m[1] ?? m[2] ?? m[3] ?? m[4]];
+    for (const target of names) {
+      if (target) refs.push({ rel: 'section', target, line: lineAt(content, m.index), raw: truncate(m[0]), literal: true, value: 'section_api' });
+    }
+  }
+  return refs;
 }
 
 // A tag name with a dash is a custom element by spec — the markup half of a

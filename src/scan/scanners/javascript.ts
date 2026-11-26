@@ -1,6 +1,6 @@
 import { init, parse } from 'es-module-lexer';
 import type { RawRef, ScannerResult } from '../../graph/types.ts';
-import { lineAt, maskJs, truncate } from './util.ts';
+import { lineAt, maskJs, sectionApiRefs, truncate } from './util.ts';
 
 await init;
 
@@ -71,6 +71,8 @@ export function scanJavaScript(file: { id: string; content: string }): ScannerRe
       refs.push({ rel, target, line: lineAt(content, index), raw: truncate(raw), literal: true, names: names(raw) });
     }
   };
+
+  if (/section[_-]?id|sections=/i.test(content)) for (const ref of sectionApiRefs(maskJs(content, true))) refs.push(ref);
 
   if (!usedLexer) {
     // Fallback regex pass. es-module-lexer is a JS lexer, so TSX generics and

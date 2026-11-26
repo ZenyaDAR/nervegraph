@@ -103,7 +103,9 @@ export function createServer(graphPath: string): http.Server {
     if (route) {
       try {
         const content = await readFile(path.join(VIEWER_DIR, route.file));
-        res.writeHead(200, { 'Content-Type': route.type });
+        // Without it the browser caches heuristically, and after an upgrade a
+        // new index.html can run against a stale app.js whose ids no longer match.
+        res.writeHead(200, { 'Content-Type': route.type, 'Cache-Control': 'no-cache' });
         res.end(content);
       } catch {
         res.writeHead(500, { 'Content-Type': 'text/plain' });

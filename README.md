@@ -13,8 +13,8 @@
 > Rust · Go · PHP · Java/Kotlin · C/C++ · Markdown · Shell · Terraform
 
 ```bash
-npx nervegraph scan     # → .nervegraph/graph.json
-npx nervegraph view     # → http://localhost:4210
+npx nervegraph@latest scan     # → .nervegraph/graph.json
+npx nervegraph@latest view     # → http://localhost:4210
 ```
 
 ![nervegraph viewer — an interactive dependency map with a detail panel showing which files use the selected file](https://raw.githubusercontent.com/ZenyaDAR/nervegraph/main/media/demo.jpg)
@@ -29,11 +29,14 @@ dependents and 8 dependencies, each with the exact import line.*
 Nothing to install — `npx` runs it straight from npm:
 
 ```bash
-npx nervegraph scan
-npx nervegraph view
+npx nervegraph@latest scan
+npx nervegraph@latest view
 ```
 
-Or install it properly:
+Keep the `@latest`: without it, `npx` runs a copy installed in the project or
+globally, however old. Offline, use `npx --offline nervegraph` (runs the cached copy).
+
+Or install it properly, which pins the version until you update it:
 
 ```bash
 npm install -g nervegraph     # global, gives you the `nerve` binary
@@ -113,13 +116,14 @@ between two files, and the focus controls.
 | `--orphans` | off | List unreferenced code files (`--all` adds tests, fixtures, docs, config) |
 | `--fields <a,b>` | — | List modes: keep only these row fields |
 | `--missing` | off | List referenced files that aren't on disk |
-| `--unresolved` | off | List references static analysis couldn't follow |
+| `--unresolved` | off | List references static analysis couldn't follow (`--all` adds external packages and URLs) |
 | `--risk <level>` | — | List files at `low`, `medium` or `high` risk |
 | `--dead-exports` | off | List exports nothing imports |
 | `--duplicates` | off | List groups of byte-identical files |
 | `--cycles` | off | List dependency cycles |
 | `--packages` | off | Fold the graph up to one node per package (monorepos) |
-| `--graph <path>` | `.nervegraph/graph.json` | Which graph to read |
+| `--graph <path>` | nearest `.nervegraph/graph.json` | Which graph to read |
+| `--no-autoscan` | off | Don't scan a missing graph or re-scan a stale one |
 
 ```
 $ nerve query src/graph/types.ts
@@ -179,42 +183,170 @@ README or an ADR and be diffed like code.
 
 ```bash
 cd some-project
-npx nervegraph scan          # 98 files · 114 edges
-npx nervegraph view          # → http://localhost:4210
+npx nervegraph@latest scan          # 98 files · 114 edges
+npx nervegraph@latest view          # → http://localhost:4210
 ```
 
 ### For AI agents
 
-Don't read `graph.json` itself — on a real repo it is hundreds of kilobytes
-(tens of thousands of tokens). Ask it questions instead; every answer is a few
-kilobytes of one-line JSON:
+The MCP server is the way in — an agent finds it on its own and calls it
+before it reaches for grep:
+
+```json
+{ "mcpServers": { "nervegraph": { "command": "npx", "args": ["-y", "nervegraph@latest", "mcp"] } } }
+```
+
+Five read-only tools: `nervegraph_query` (what a change to one file
+affects), `nervegraph_overview` (start here), `nervegraph_symbol` (one
+export), `nervegraph_changed` (git changes, their dependents and tests) and
+`nervegraph_list` (orphans, missing, unresolved, risk, unused exports,
+duplicates, cycles, packages). The server sends instructions on when to use
+them and keeps `nervegraph_query` loaded with the session.
+
+The same answers from the shell — one-line JSON, a few kilobytes each:
 
 ```bash
-nerve scan --quiet
 nerve overview --json                     # 1. layout, entrypoints, hubs, issue counts
-nerve query src/graph/io.ts --json        # 2. before an edit: usedBy, uses, tests, risk
+nerve query src/graph/io.ts --json        # 2. before an edit: what it affects, tests, risk
 nerve query --symbol readGraph --json     # 3. before a rename: every import site
 nerve query --changed --json              # 4. after edits: dependents and tests to run
 ```
 
-`usedBy` lists what breaks if the file changes, `transitiveDependents` is the
-full blast radius, `tests` the test files that reach it, and `stale: true`
-means the file changed since the scan — run `nerve scan` first. Lists are
-capped at `--limit` (default 50) with the dropped counts under `truncated`.
-`nerve agents-md >> CLAUDE.md` writes a short note telling an agent all this.
+In a card, `usedBy` lists the direct dependents with lines and imported names,
+`indirectDependents` every other file that reaches it, grouped by type
+(`section`, `template_json`, `javascript`, …), `affectedByType` counts all of
+them, and `tests` the test files that reach it. Lists are capped at `--limit`
+(default 50, per type for `indirectDependents`) with the dropped counts under
+`truncated`. A wrong file name answers with the closest matches; a directory
+with its files.
 
-Agents that speak MCP can skip the shell entirely:
+No need to scan first: every command finds the nearest
+`.nervegraph/graph.json` (up to the repository root), scans when there is
+none, and re-scans when a file changed since — `--no-autoscan` turns that off.
+If you commit `.nervegraph/`, commit `graph.json` only: `graph.prev.json` and
+`walked` are the tool's local state.
+Don't read `graph.json` itself; on a real repo it is tens of thousands of
+tokens. `nerve agents-md >> CLAUDE.md` writes a short note for agents that use
+the shell.
 
-```json
-{ "mcpServers": { "nervegraph": { "command": "npx", "args": ["nervegraph", "mcp"] } } }
-```
+How much this helps an agent, measured: [With and without nervegraph](#with-and-without-nervegraph).
 
-Five tools: `nervegraph_overview` (start here), `nervegraph_query` (one file),
-`nervegraph_symbol` (one export), `nervegraph_changed` (git changes, their
-dependents and tests) and `nervegraph_list` (orphans, missing, unresolved,
-risk, unused exports, duplicates, cycles, packages). The graph is re-read on
-every call and re-scanned first when it is missing or a file changed since
-the scan; `nerve mcp --no-autoscan` turns that off.
+---
+
+## With and without nervegraph
+
+An agent can answer "what does this change affect" on its own, with grep and
+file reads. The question is whether the graph makes it more correct or
+cheaper, and whether an agent uses the graph at all when it is connected.
+We ran the same tasks three ways and checked every answer.
+
+### How it was measured
+
+- **Project:** [Shopify Horizon](https://github.com/Shopify/horizon) (`main`,
+  2026-11-25), 511 files. It is public, and modern themes are where most links
+  are not plain imports: `@theme/*` import maps, `{% render %}`, theme blocks
+  named in `{% schema %}`, custom elements, sections fetched by the Section
+  Rendering API.
+- **Agent:** Claude Code 2.1.332, headless (`claude -p --model sonnet`). No
+  user settings, hooks, memory, skills or other MCP servers. Read-only tools:
+  `Read`, `Grep`, `Glob` (no shell), plus the nervegraph MCP server where noted.
+- **Setups:**
+  - **A, without nervegraph:** built-in tools only.
+  - **B, previous build connected:** the MCP server as it was before the
+    agent-facing changes in this release, with and without the `agents-md`
+    snippet in `CLAUDE.md`.
+  - **C, this build connected:** the same, with this release.
+- **Reference answers** came from a separate script that reads the theme
+  sources, not from nervegraph. It missed one real chain, which was found by
+  comparing answers and confirmed by hand. The reference was corrected for
+  every setup alike.
+- **Runs:** 2 per task and setup (task 3 in setup A: 1). Recall is the share of
+  the reference files an answer named; no answer named a wrong file.
+
+### Did the agent use the graph?
+
+| Setup | Runs where the agent called nervegraph |
+|---|---|
+| B, previous build | **0 of 7** without the snippet, **1 of 4** with it |
+| C, this build | **16 of 16** (8 with the snippet, 8 without) |
+
+With the previous build the server was connected and its tools were listed,
+yet the agent searched with `Grep` anyway. The tool descriptions listed fields
+("usedBy, uses, risk…") and did not say which question they answer or when to
+prefer them over grep. Claude Code also loads MCP tools on demand, behind a
+tool search, so an unclear description is never loaded. In the one run that
+did call it, the answer was a count (`transitiveDependents: 67`) and one mixed
+list, so the agent re-checked it with grep.
+
+### Results, A (without) vs C (with)
+
+| Task | Setup | Found | Turns | Input tokens | Time | Cost |
+|---|---|---|---|---|---|---|
+| 1. Which `sections/` and `templates/` files can a change to `snippets/product-media.liquid` affect, through any chain? (16 files) | A | **88%** (14 of 16) | 7–9 | 109k | 27 s | $0.117 |
+| | C | **100%** | 2 | 26k | 8 s | $0.051 |
+| 2. Which JS files can a change to `assets/utilities.js` affect, through any chain of imports? (67 files) | A | 100% | 4 | 53k | 20 s | $0.098 |
+| | C | 100% | 2 | 33k | 12 s | $0.078 |
+| 3. Which files import the export `requestIdleCallback` by name? (6 files) | A | 100% | 3 | 25k | 8 s | $0.047 |
+| | C | 100% | 5–6 | 47k | 13 s | $0.058 |
+| 4. Which JS files import `assets/component.js` directly? (56 files) | A | 100% | 2–3 | 13k | 7 s | $0.020 |
+| | C | 100% | 3 | 34k | 11 s | $0.088 |
+
+Setup B matched setup A on every task (it never used the graph), at the cost
+of the extra tool definitions: task 1 took 10–13 turns and 143k tokens.
+
+**What the numbers say:**
+
+- **Chains across file types (task 1): more correct, 4× fewer tokens, less
+  than half the cost.** Grepping
+  hop by hop, from the snippet to the snippets that render it, the blocks and
+  sections, then the templates, the agent missed two sections in every run:
+  - `sections/carousel.liquid` reaches the snippet through theme blocks named
+    in its `{% schema %}`, not through a tag in its markup;
+  - `sections/product-hotspots.liquid` reaches it through a custom element
+    defined in `assets/quick-add.js`, which fetches a section with the Section
+    Rendering API.
+
+  The graph answered in one call. Its `indirectDependents` are grouped by
+  type, so the agent read off `section` and `template_json`.
+- **Chains of imports (task 2): same answer, 38% fewer tokens, 40% less
+  time.** A JS import chain is uniform enough for grep, but it still takes a
+  search per level.
+- **One-hop questions (tasks 3 and 4): grep is cheaper.** One search answers
+  them. With the graph connected the agent called it, then grepped to confirm,
+  so it paid for both. Use grep for these.
+
+### What changed between B and C
+
+All changes are in how the tool presents itself and what it returns. The
+graph is the same.
+
+- **MCP server instructions** say when to prefer the graph over grep, and what
+  it cannot see (string-built paths, events, globals).
+- **Tool descriptions** start with the question they answer ("What breaks if I
+  change, move or delete this file?").
+- **`nervegraph_query` is loaded with the session** (`anthropic/alwaysLoad`)
+  instead of behind a tool search. Without that, the agent still found it for
+  tasks 1 and 2, with one extra turn and 12k more tokens.
+- **The card answers instead of pointing:** `indirectDependents` grouped by
+  type (each type capped on its own, so 50 blocks cannot hide the JS modules),
+  and `affectedByType` counts.
+- **Fewer steps:**
+  - no "run `nerve scan` first": a missing or stale graph is scanned before
+    the call;
+  - a wrong file name returns the closest matches;
+  - every tool is marked read-only, so the client may run calls in parallel.
+
+### Limits of this measurement
+
+- **Small sample:** one theme, one model, two runs per cell. Read it as
+  direction and rough size, not a benchmark.
+- **One kind of project:** a Shopify theme is the case nervegraph covers best.
+  On a plain TypeScript project, where grep follows imports well, expect a
+  smaller difference.
+- **Token counts include cached input,** which costs less than fresh input.
+  The cost column is what the CLI reported.
+- **Not measured:** editing tasks (whether the change ends up correct) and
+  agents other than Claude Code.
 
 ---
 
@@ -222,8 +354,8 @@ the scan; `nerve mcp --no-autoscan` turns that off.
 
 | Language | Extensions | What becomes an edge |
 |---|---|---|
-| Liquid | `.liquid` | `render`, `include`, `section`, `sections`, `content_for`, `asset_url`, `t` |
-| JavaScript / TypeScript | `.js` `.mjs` `.cjs` `.jsx` `.ts` `.tsx` `.mts` `.cts` | `import`, `export … from`, `import()`, `require()` |
+| Liquid | `.liquid` | `render`, `include`, `section`, `sections`, `content_for`, `asset_url`, `inline_asset_content`, `t`, `{% schema %}` theme blocks, inline `<script>` imports |
+| JavaScript / TypeScript | `.js` `.mjs` `.cjs` `.jsx` `.ts` `.tsx` `.mts` `.cts` | `import`, `export … from`, `import()`, `require()`, through tsconfig/jsconfig paths and import maps |
 | HTML | `.html` `.htm` | `<script src>`, `<link href>`, `<img>`/`<source>`/`<iframe>`/… `src` |
 | CSS | `.css` `.scss` `.sass` `.less` | `@import`, `@use`, `url()` |
 | Python | `.py` `.pyi` | `import x`, `from x import y`, relative `from .x import y` |
@@ -237,7 +369,8 @@ the scan; `nerve mcp --no-autoscan` turns that off.
 | Markdown | `.md` `.mdx` | links and images pointing at project files |
 | Shell | `.sh` `.bash` `.zsh` | `source x.sh` / `. x.sh` |
 | Terraform | `.tf` `.tfvars` | `module { source = "./…" }` |
-| Shopify JSON | `templates/*.json`, `sections/*.json` | `sections.*.type` |
+| Shopify JSON | `templates/*.json`, `sections/*.json` | `sections.*.type`, theme blocks in `blocks.*.type` |
+| Section Rendering API | theme JS and Liquid | `section_id=x`, `'section_id', 'x'`, `data-section-id="x"`, `sections=a,b` |
 | Web components | any markup + JS | `<product-form>` ↔ `customElements.define('product-form', …)` |
 
 ### Maturity
@@ -280,9 +413,10 @@ Deliberate, and cheaper to state than to hide:
   `import`; only cross-package coupling shows up.
 - **`import a.b.*` and `use App\{A, B}` are skipped** rather than expanded to
   an arbitrary member of the package.
-- **Aliases are resolved from a single root config.** `tsconfig.json`
-  `extends` chains and per-package tsconfigs in a monorepo are not followed;
-  workspace package names are.
+- **A theme's import maps are merged into one**, `scopes` included; maps that
+  disagree are not told apart. An HTML page's map applies to its own directory.
+- **`@theme` in a schema is not expanded.** A block only ever placed through
+  `"type": "@theme"`, and named by no file, is listed as an orphan.
 
 ---
 

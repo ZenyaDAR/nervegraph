@@ -1,14 +1,22 @@
 import type { RawRef, ScannerResult } from '../../graph/types.ts';
-import { customElementRefs } from './util.ts';
+import { parseJsonc } from '../aliases.ts';
+import { inlineScripts } from './html.ts';
+import { scanJavaScript } from './javascript.ts';
+import { blank, customElementRefs, isExternalUrl, lineAt, sectionApiRefs } from './util.ts';
 
 // Replace {% comment %}, {% doc %} and {% raw %} bodies with an equal number
 // of newlines so line numbers stay correct, but the content itself (a doc
-// block's `{% render 'x' %}` usage example, say) produces no matches.
-function stripCommentsAndRaw(content: string): string {
+// block's `{% render 'x' %}` usage example, say) produces no matches. Inline
+// `{% # … %}` comments and comments inside {% liquid %} go the same way.
+export function stripCommentsAndRaw(content: string): string {
   return content
-    .replace(/\{%-?\s*comment\s*-?%\}[\s\S]*?\{%-?\s*endcomment\s*-?%\}/g, m => '\n'.repeat(countNewlines(m)))
+    .replace(/\{%-?\s*comment\b[^%]*%\}[\s\S]*?\{%-?\s*endcomment\b[^%]*%\}/g, m => '\n'.repeat(countNewlines(m)))
     .replace(/\{%-?\s*doc\s*-?%\}[\s\S]*?\{%-?\s*enddoc\s*-?%\}/g, m => '\n'.repeat(countNewlines(m)))
-    .replace(/\{%-?\s*raw\s*-?%\}[\s\S]*?\{%-?\s*endraw\s*-?%\}/g, m => '\n'.repeat(countNewlines(m)));
+    .replace(/\{%-?\s*raw\s*-?%\}[\s\S]*?\{%-?\s*endraw\s*-?%\}/g, m => '\n'.repeat(countNewlines(m)))
+    .replace(/\{%-?\s*#[\s\S]*?%\}/g, m => '\n'.repeat(countNewlines(m)))
+    .replace(/(\{%-?\s*liquid\b)([\s\S]*?)(%\})/g, (_m, open: string, body: string, close: string) => open + body
+      .replace(/^[ \t]*comment[ \t\r]*$[\s\S]*?^[ \t]*endcomment\b[^\n]*/gm, m => '\n'.repeat(countNewlines(m)))
+      .replace(/^[ \t]*#[^\n]*/gm, '') + close);
 }
 
 function countNewlines(s: string): number {
@@ -17,18 +25,96 @@ function countNewlines(s: string): number {
   return n;
 }
 
-function lineAt(content: string, index: number): number {
-  let line = 1;
-  for (let i = 0; i < index; i++) if (content[i] === '\n') line++;
-  return line;
-}
-
 function truncateRaw(s: string): string {
   const trimmed = s.trim();
   return trimmed.length > 120 ? trimmed.slice(0, 120) : trimmed;
 }
 
 const QUOTED = `'([^']*)'|"([^"]*)"`;
+
+// Tag arguments up to the closing `%}`; a lone `%` (`width: '100%'`) is part of
+// them. An unclosed tag ends at the next `{%` instead of swallowing it.
+const ARGS = '((?:[^%{]|%(?!\\})|\\{(?!%))+?)';
+
+/** `{% tag args %}`, whitespace control included; group 1 is the arguments. */
+function tagRe(tag: string): RegExp {
+  return new RegExp(`\\{%-?\\s*${tag}\\s+${ARGS}-?%\\}`, 'g');
+}
+
+// A literal piped straight into a file or translation filter, in any tag:
+// `{{- 'a.css' | asset_url }}`, `{% assign u = 'a.js' | asset_url %}`. A literal
+// after `:` or `,` is another filter's argument (`| append: '.svg' | asset_url`).
+const FILTER_RE = /(?:\{\{-?\s*|(?<![:,]\s*))(?:'([^'\n{}]+)'|"([^"\n{}]+)")\s*\|\s*(asset_url|asset_img_url|inline_asset_content|t|translate)\b(?:[^{}%\n]*\}\})?/g;
+
+const SCHEMA_RE = /\{%-?\s*schema\s*-?%\}([\s\S]*?)\{%-?\s*endschema\s*-?%\}/;
+
+/**
+ * Theme blocks a schema names in `blocks`, `presets` or `default`, and the block
+ * types it defines itself. An entry with a name or settings is a local block
+ * and has no file; a bare `{ "type": "slide" }` is blocks/slide.liquid.
+ */
+function schemaBlocks(content: string): { refs: RawRef[]; localBlocks: string[]; presets: boolean } {
+  const m = SCHEMA_RE.exec(content);
+  const schema = m && parseJsonc(m[1]);
+  if (!m || !schema || typeof schema !== 'object') return { refs: [], localBlocks: [], presets: false };
+
+  const items = (blocks: unknown): any[] =>
+    blocks && typeof blocks === 'object' ? Object.values(blocks).filter(b => typeof b?.type === 'string') : [];
+  const local = new Set<string>(
+    items(schema.blocks).filter(b => b.name !== undefined || b.settings !== undefined).map(b => b.type));
+
+  const types = new Set<string>();
+  const collect = (blocks: unknown, top: boolean): void => {
+    for (const b of items(blocks)) {
+      const placeholder = b.type.startsWith('@') || b.type.startsWith('shopify://');
+      if (!placeholder && !(top && local.has(b.type))) types.add(b.type);
+      collect(b.blocks, false);
+    }
+  };
+  collect(schema.blocks, true);
+  for (const preset of Array.isArray(schema.presets) ? schema.presets : []) collect(preset?.blocks, true);
+  collect(schema.default?.blocks, true);
+
+  // Settings have a "type" too; searching from the first "blocks" key skips the section's own.
+  const bodyStart = m.index + m[0].indexOf(m[1]);
+  const from = bodyStart + Math.max(m[1].indexOf('"blocks"'), 0);
+  const refs = [...types].map((type): RawRef => {
+    const escaped = type.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const at = new RegExp(`"type"\\s*:\\s*"${escaped}"`).exec(content.slice(from));
+    return {
+      rel: 'content_for', target: type, line: lineAt(content, from + (at?.index ?? 0)),
+      raw: truncateRaw(`"type": "${type}"`), literal: true, value: 'schema_block',
+    };
+  });
+  return { refs, localBlocks: [...local], presets: Array.isArray(schema.presets) && schema.presets.length > 0 };
+}
+
+const JAVASCRIPT_TAG_RE = /\{%-?\s*javascript\s*-?%\}([\s\S]*?)\{%-?\s*endjavascript\s*-?%\}/g;
+
+/**
+ * Inline `<script>` and `{% javascript %}` bodies: bare imports (import map
+ * names) and custom elements. A relative import resolves against the page URL,
+ * not this file, so it names no project file.
+ */
+function inlineJs(id: string, content: string): { refs: RawRef[]; defines: string[] } {
+  const refs: RawRef[] = [];
+  const defines: string[] = [];
+  const bodies = inlineScripts(content.replace(/<!--[\s\S]*?-->/g, blank));
+  for (const m of content.matchAll(JAVASCRIPT_TAG_RE)) {
+    bodies.push({ body: m[1], offset: lineAt(content, m.index + m[0].indexOf(m[1])) - 1 });
+  }
+  for (const { body, offset } of bodies) {
+    if (!/\bimport\b|customElements/.test(body)) continue;
+    const js = scanJavaScript({ id, content: body });
+    defines.push(...js.defines ?? []);
+    for (const ref of js.refs) {
+      const bare = (ref.rel === 'import' || ref.rel === 'dynamic_import') && ref.literal
+        && /^[@#\w]/.test(ref.target) && !isExternalUrl(ref.target) && !/[{}]/.test(ref.target);
+      if (bare) refs.push({ ...ref, line: ref.line + offset });
+    }
+  }
+  return { refs, defines };
+}
 
 /**
  * `{% assign card = 'product-card' %}` … `{% render card %}` — the indirection
@@ -40,7 +126,7 @@ function literalAssignments(content: string): Map<string, string> {
   const found = new Map<string, string>();
   const ambiguous = new Set<string>();
   const re = /\{%-?\s*assign\s+([A-Za-z_][\w-]*)\s*=\s*(?:'([^']*)'|"([^"]*)")\s*-?%\}/g;
-  const expression = /\{%-?\s*assign\s+([A-Za-z_][\w-]*)\s*=\s*([^%]+?)-?%\}/g;
+  const expression = new RegExp(`\\{%-?\\s*assign\\s+([A-Za-z_][\\w-]*)\\s*=\\s*${ARGS}-?%\\}`, 'g');
   let m: RegExpExecArray | null;
   while ((m = re.exec(content))) {
     const name = m[1], value = m[2] ?? m[3];
@@ -62,16 +148,6 @@ export function scanLiquid(file: { id: string; content: string }): ScannerResult
   const refs: RawRef[] = [];
   const content = stripCommentsAndRaw(file.content);
   const assigned = literalAssignments(content);
-
-  function pushTagRefs(tagRe: RegExp, rel: RawRef['rel'], argPattern: RegExp) {
-    let m: RegExpExecArray | null;
-    while ((m = tagRe.exec(content))) {
-      const full = m[0];
-      const line = lineAt(content, m.index);
-      const argMatch = argPattern.exec(full);
-      handleArg(argMatch, full, line, rel);
-    }
-  }
 
   function handleArg(argMatch: RegExpExecArray | null, full: string, line: number, rel: RawRef['rel']) {
     if (!argMatch) return;
@@ -102,19 +178,13 @@ export function scanLiquid(file: { id: string; content: string }): ScannerResult
   }
 
   // {% render 'name' ... %} / {% include 'name' ... %}
-  const renderRe = /\{%-?\s*render\s+([^%]+?)-?%\}/g;
-  const includeRe = /\{%-?\s*include\s+([^%]+?)-?%\}/g;
-  const sectionRe = /\{%-?\s*section\s+([^%]+?)-?%\}/g;
-  const sectionsRe = /\{%-?\s*sections\s+([^%]+?)-?%\}/g;
-  const contentForRe = /\{%-?\s*content_for\s+([^%]+?)-?%\}/g;
-
   const firstArgRe = new RegExp(`^(?:${QUOTED}|(\\S+))`);
 
-  scanTag(renderRe, 'render');
-  scanTag(includeRe, 'include');
-  scanTag(sectionRe, 'section');
-  scanTag(sectionsRe, 'section_group');
-  scanTag(contentForRe, 'content_for');
+  scanTag(tagRe('render'), 'render');
+  scanTag(tagRe('include'), 'include');
+  scanTag(tagRe('section'), 'section');
+  scanTag(tagRe('sections'), 'section_group');
+  scanTag(tagRe('content_for'), 'content_for');
 
   function scanTag(re: RegExp, rel: RawRef['rel']) {
     let m: RegExpExecArray | null;
@@ -149,31 +219,14 @@ export function scanLiquid(file: { id: string; content: string }): ScannerResult
     handleArg(firstArgRe.exec(value), full, line, 'content_for');
   }
 
-  // `echo 'x' | asset_url` / `assign u = 'x' | asset_url` inside {% liquid %}.
-  const liquidAssetRe = new RegExp(`^(?:echo|assign\\s+[\\w-]+\\s*=)\\s*(?:${QUOTED})\\s*\\|\\s*asset(?:_img)?_url\\b`);
-
-  // {{ 'file.js' | asset_url }} / asset_img_url
-  const assetRe = new RegExp(`\\{\\{\\s*(?:${QUOTED})\\s*\\|\\s*asset(?:_img)?_url[^}]*\\}\\}`, 'g');
-  {
-    let m: RegExpExecArray | null;
-    while ((m = assetRe.exec(content))) {
-      const target = m[1] ?? m[2];
-      const line = lineAt(content, m.index);
-      // `asset_url` is a name looked up by convention in assets/, not a path —
-      // distinct from the `asset` rel that CSS url() and <img src> emit.
-      refs.push({ rel: 'asset_url', target, line, raw: truncateRaw(m[0]), literal: true });
-    }
-  }
-
-  // {{ 'key.sub' | t }}
-  const tRe = new RegExp(`\\{\\{\\s*(?:${QUOTED})\\s*\\|\\s*t(?:\\s*:[^}]*)?\\s*\\}\\}`, 'g');
-  {
-    let m: RegExpExecArray | null;
-    while ((m = tRe.exec(content))) {
-      const target = m[1] ?? m[2];
-      const line = lineAt(content, m.index);
-      refs.push({ rel: 'translation', target, line, raw: truncateRaw(m[0]), literal: true });
-    }
+  // `asset_url` is a name looked up by convention in assets/, not a path —
+  // distinct from the `asset` rel that CSS url() and <img src> emit.
+  for (const m of content.matchAll(FILTER_RE)) {
+    const rel = m[3] === 't' || m[3] === 'translate' ? 'translation' : 'asset_url';
+    const target = m[1] ?? m[2];
+    // `'?' | asset_url` is a trick to get the assets base URL, not a file.
+    if (!/[\p{L}\p{N}]/u.test(target)) continue;
+    refs.push({ rel, target, line: lineAt(content, m.index), raw: truncateRaw(m[0]), literal: true });
   }
 
   // {% liquid ... %} block: lines starting with render/include/section
@@ -196,10 +249,6 @@ export function scanLiquid(file: { id: string; content: string }): ScannerResult
             const argMatch = firstArgRe.exec(tagMatch[2].trim());
             handleArg(argMatch, trimmed, lineNo, rel);
           }
-        }
-        const asset = liquidAssetRe.exec(trimmed);
-        if (asset) {
-          refs.push({ rel: 'asset_url', target: asset[1] ?? asset[2], line: lineNo, raw: truncateRaw(trimmed), literal: true });
         }
         offset += rawLine.length + 1;
       }
@@ -224,7 +273,11 @@ export function scanLiquid(file: { id: string; content: string }): ScannerResult
     }
   }
 
-  refs.push(...customElementRefs(content));
+  for (const ref of [...customElementRefs(content), ...sectionApiRefs(content)]) refs.push(ref);
 
-  return { refs };
+  const schema = schemaBlocks(content);
+  const js = inlineJs(file.id, content);
+  refs.push(...schema.refs, ...js.refs);
+
+  return { refs, defines: js.defines, localBlocks: schema.localBlocks, ...(schema.presets ? { presets: true } : {}) };
 }

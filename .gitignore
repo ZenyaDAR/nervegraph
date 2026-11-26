@@ -12,3 +12,4 @@ coverage/
 .DS_Store
 .mcp.json
 .playwright-mcp/
+.playguard/

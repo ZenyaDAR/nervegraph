@@ -12,12 +12,17 @@ export interface AliasRule {
   prefix: string;
   /** Project-relative path templates, '*' replaced by whatever the prefix captured. */
   targets: string[];
+  /** Directory the rule is limited to (a nested tsconfig/jsconfig); absent = whole project. */
+  scope?: string;
 }
 
-/** Expand `spec` through the rules, returning candidate project-relative paths. */
-export function expandAlias(spec: string, rules: AliasRule[]): string[] {
+/**
+ * Expand `spec` through the rules, returning candidate project-relative paths.
+ * `fromDir` is the importing file's directory; without it scoped rules are skipped.
+ */
+export function expandAlias(spec: string, rules: AliasRule[], fromDir?: string): string[] {
   const out: string[] = [];
-  for (const rule of rules) {
+  for (const rule of inScope(rules, fromDir)) {
     if (rule.prefix.endsWith('*')) {
       const head = rule.prefix.slice(0, -1);
       if (!spec.startsWith(head)) continue;
@@ -32,6 +37,33 @@ export function expandAlias(spec: string, rules: AliasRule[]): string[] {
     }
   }
   return out.map(normalizeRel).filter(p => p !== undefined) as string[];
+}
+
+// A monorepo has one config per package, each extending one big `paths` table:
+// testing every rule for every import made a scan take a minute. Rules are
+// filtered once per directory, a whole run of same-scope rules at a time.
+interface ScopeRun { scope?: string; rules: AliasRule[] }
+const scopeCache = new WeakMap<AliasRule[], { runs: ScopeRun[]; byDir: Map<string, AliasRule[]> }>();
+
+function inScope(rules: AliasRule[], fromDir = ''): AliasRule[] {
+  let cache = scopeCache.get(rules);
+  if (!cache) {
+    const runs: ScopeRun[] = [];
+    for (const rule of rules) {
+      const run = runs[runs.length - 1];
+      if (run && run.scope === rule.scope) run.rules.push(rule);
+      else runs.push({ scope: rule.scope, rules: [rule] });
+    }
+    scopeCache.set(rules, cache = { runs, byDir: new Map() });
+  }
+  let hit = cache.byDir.get(fromDir);
+  if (!hit) {
+    hit = cache.runs
+      .filter(r => !r.scope || fromDir === r.scope || fromDir.startsWith(`${r.scope}/`))
+      .flatMap(r => r.rules);
+    cache.byDir.set(fromDir, hit);
+  }
+  return hit;
 }
 
 /** The `module` line of go.mod: the import-path prefix of the repo's own packages. */
@@ -87,8 +119,19 @@ export function loadPsr4(root: string): AliasRule[] {
   return rules;
 }
 
-export function loadAliases(root: string): AliasRule[] {
+/**
+ * `ids` are the project's files: every nested tsconfig/jsconfig among them adds
+ * rules for its own directory (a theme keeps one in assets/), deepest first.
+ */
+export function loadAliases(root: string, ids: Iterable<string> = []): AliasRule[] {
+  const dirs = new Set<string>();
+  for (const id of ids) {
+    const m = /^(.+)\/[tj]sconfig\.json$/.exec(id);
+    if (m) dirs.add(m[1]);
+  }
   return [
+    ...[...dirs].sort((a, b) => b.length - a.length)
+      .flatMap(dir => fromTsconfig(root, dir).map(rule => ({ ...rule, scope: dir }))),
     ...fromTsconfig(root),
     ...fromPackageImports(root),
     ...fromWorkspaces(root),
@@ -97,13 +140,9 @@ export function loadAliases(root: string): AliasRule[] {
 
 // ── tsconfig / jsconfig ────────────────────────────────────────────────────
 
-// ponytail: only a root-level config is read. Per-package configs in a
-// monorepo would need a config per directory — add that when a real repo
-// needs it; the workspace rules below already cover the common cross-package
-// case.
-function fromTsconfig(root: string): AliasRule[] {
+function fromTsconfig(root: string, dir = ''): AliasRule[] {
   for (const name of ['tsconfig.json', 'jsconfig.json']) {
-    const file = path.join(root, name);
+    const file = path.join(root, dir, name);
     if (!existsSync(file)) continue;
     const opts = readTsconfigChain(file, root, new Set());
     if (!opts) continue;

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { RawRef, GraphEdge, UnresolvedRef } from './types.ts';
+import { OPTIONAL_VALUES } from './types.ts';
 import { findResolver, type ResolveContext } from './resolvers/index.ts';
 
 export type { ResolveContext } from './resolvers/index.ts';
@@ -48,12 +49,16 @@ export function resolveRefs(fromId: string, refs: RawRef[], ctx: ResolveContext)
       if (local !== 'external' && !local.missing) resolved = local;
     }
 
-    // A JSON block type with no blocks/<type>.liquid is a block defined in the
-    // section's own schema, not a broken reference.
-    if (ref.value === 'theme_block' && resolved !== 'external' && resolved.missing) continue;
+    if (ref.value !== undefined && OPTIONAL_VALUES.has(ref.value)
+        && (resolved === 'external' || resolved.missing || resolved.id === fromId)) continue;
+
+    // Browsers have no require(): in a theme it is left over inside a UMD or
+    // browserify bundle and resolves within that bundle.
+    if (ref.rel === 'require' && ctx.profile === 'shopify' && fromId.startsWith('assets/')
+        && resolved !== 'external' && resolved.missing) resolved = 'external';
 
     if (resolved === 'external') {
-      unresolved.push({ from: fromId, line: ref.line, rel: ref.rel, raw: ref.raw, reason: 'external', hint: 'bare import / npm package, not a project file' });
+      unresolved.push({ from: fromId, line: ref.line, rel: ref.rel, raw: ref.raw, reason: 'external', hint: externalHint(ref) });
       continue;
     }
 
@@ -66,6 +71,12 @@ export function resolveRefs(fromId: string, refs: RawRef[], ctx: ResolveContext)
   }
 
   return { edges, unresolved, missingTargets };
+}
+
+function externalHint(ref: RawRef): string {
+  if (ref.rel === 'template_section') return 'section provided by Shopify, not a theme file';
+  if (ref.rel === 'require' && /^[./]/.test(ref.target)) return 'require() resolved inside a browser bundle';
+  return 'bare import / npm package, not a project file';
 }
 
 function hintFor(ref: RawRef): string {

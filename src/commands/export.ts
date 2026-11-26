@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { readGraph } from '../graph/io.ts';
+import { readGraph, resolveGraphPath } from '../graph/io.ts';
 import type { Graph } from '../graph/types.ts';
 import { buildAdjacency, lookupNode, neighborhood, reportLookupFailure } from './query.ts';
 
@@ -25,7 +25,7 @@ export async function runExport(args: ExportArgs): Promise<number> {
     console.error(`error: unknown format "${format}" (mermaid | dot)`);
     return 2;
   }
-  const graphPath = path.resolve(args.graph ?? '.nervegraph/graph.json');
+  const graphPath = resolveGraphPath(args.graph);
   if (!existsSync(graphPath)) {
     console.error(`error: graph not found at ${graphPath}`);
     console.error('run: nerve scan');

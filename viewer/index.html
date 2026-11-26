@@ -8,125 +8,244 @@
 </head>
 <body>
   <header id="topbar">
-    <span id="brand">nervegraph</span>
-    <span id="root-name"></span>
-    <span id="counts"></span>
-    <div id="search-wrap">
-      <input id="search" type="text" placeholder="⌕ search  (/ or Ctrl+K)" autocomplete="off">
-      <div id="search-results" hidden></div>
+    <button id="filters-toggle" type="button" class="btn quiet sq" aria-label="Filters" aria-expanded="false">
+      <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h7M12.5 4h1M2.5 8h2M7.5 8h6M2.5 12h5M10.5 12h3"/><circle cx="11" cy="4" r="1.5"/><circle cx="6" cy="8" r="1.5"/><circle cx="9" cy="12" r="1.5"/></svg>
+    </button>
+    <div id="brand">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M4 13L9 4L14.5 11.5" fill="none" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.3"/><circle cx="9" cy="4" r="2.3" fill="currentColor"/><circle cx="4" cy="13" r="2" fill="currentColor"/><circle cx="14.5" cy="11.5" r="2.8" fill="var(--accent)"/></svg>
+      nervegraph
     </div>
-    <button id="theme-btn" title="light / dark / follow system">◐</button>
-    <button id="help-btn" title="keyboard shortcuts (?)">?</button>
-    <button id="refresh-btn" title="reload graph.json">⟳</button>
+    <span class="sep" aria-hidden="true">/</span>
+    <span id="root-name"></span>
+    <span id="counts" class="mono"></span>
+    <div id="search-wrap">
+      <label id="search-box">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+        <input id="search" type="text" placeholder="Search files" autocomplete="off" aria-label="Search files" aria-controls="search-results" aria-expanded="false" role="combobox">
+        <span id="search-kbd" class="kbd">/</span>
+      </label>
+      <div id="search-results" class="over" role="listbox" aria-label="Search results" hidden></div>
+    </div>
+    <div id="theme-btn" class="seg" role="radiogroup" aria-label="Theme">
+      <button type="button" role="radio" data-theme-value="auto">Auto</button>
+      <button type="button" role="radio" data-theme-value="dark">Dark</button>
+      <button type="button" role="radio" data-theme-value="light">Light</button>
+    </div>
+    <button id="help-btn" type="button" class="btn sq" aria-label="Keyboard shortcuts (?)" title="Keyboard shortcuts (?)">
+      <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M6.2 6.2a1.9 1.9 0 0 1 3.6.6c0 1.3-1.8 1.6-1.8 2.7M8 11.6v.1"/></svg>
+    </button>
+    <button id="refresh-btn" type="button" class="btn sq" aria-label="Reload graph.json" title="Reload graph.json">
+      <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg>
+    </button>
   </header>
 
   <main id="layout">
-    <aside id="filters">
-      <button id="filters-toggle" class="panel-toggle" aria-label="toggle filters">☰</button>
+    <aside id="filters" aria-label="Filters">
+      <div id="filters-rail">
+        <button id="filters-expand" type="button" class="btn quiet sq" aria-label="Show filters" title="Show filters">
+          <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h7M12.5 4h1M2.5 8h2M7.5 8h6M2.5 12h5M10.5 12h3"/><circle cx="11" cy="4" r="1.5"/><circle cx="6" cy="8" r="1.5"/><circle cx="9" cy="12" r="1.5"/></svg>
+        </button>
+        <span id="filters-active" class="mono"></span>
+      </div>
       <div id="filters-body">
-        <h2>View</h2>
-        <label class="control">color by
-          <select id="color-by">
-            <option value="type">type</option>
-            <option value="language">language</option>
-            <option value="directory">directory</option>
-            <option value="risk">risk</option>
-          </select>
-        </label>
-        <label class="control">size by
-          <select id="size-by">
-            <option value="in">dependents</option>
-            <option value="out">dependencies</option>
-            <option value="loc">lines of code</option>
-          </select>
-        </label>
-        <label class="control">group by folder
-          <select id="group-by">
-            <option value="0">off</option>
-            <option value="1">depth 1</option>
-            <option value="2">depth 2</option>
-            <option value="3">depth 3</option>
-          </select>
-        </label>
-        <button id="collapse-all" class="more-btn">collapse expanded folders</button>
-        <div id="legend"></div>
+        <section class="sec" data-sec="view">
+          <div class="sh-row">
+            <button type="button" class="sh" aria-expanded="true"><svg class="ic chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>View</button>
+            <button id="filters-collapse" type="button" class="btn quiet sq sm" aria-label="Hide filters" title="Hide filters">
+              <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 4L6 8l4 4"/></svg>
+            </button>
+          </div>
+          <div class="sec-body">
+            <label class="ctl">Color by<span class="selw"><select id="color-by">
+              <option value="type">Type</option>
+              <option value="language">Language</option>
+              <option value="directory">Directory</option>
+              <option value="risk">Risk</option>
+            </select><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></span></label>
+            <label class="ctl">Size by<span class="selw"><select id="size-by">
+              <option value="in">Dependents</option>
+              <option value="out">Dependencies</option>
+              <option value="loc">Lines of code</option>
+            </select><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></span></label>
+            <label class="ctl">Group by folder<span class="selw"><select id="group-by">
+              <option value="0">Off</option>
+              <option value="1">Depth 1</option>
+              <option value="2">Depth 2</option>
+              <option value="3">Depth 3</option>
+            </select><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></span></label>
+            <p id="group-hint" class="hint" hidden></p>
+            <button id="collapse-all" type="button" class="btn quiet xs" hidden>Collapse opened folders</button>
+            <div id="legend"></div>
+          </div>
+        </section>
 
-        <h2>Types</h2>
-        <div id="type-filters"></div>
-        <h2>Relations</h2>
-        <div id="rel-filters"></div>
-        <h2>Show</h2>
-        <label><input type="checkbox" id="only-orphans"> only orphans <span id="count-orphans"></span></label>
-        <label><input type="checkbox" id="only-risk"> only high risk <span id="count-risk"></span></label>
-        <label><input type="checkbox" id="only-missing"> only missing <span id="count-missing"></span></label>
-        <label><input type="checkbox" id="only-cycles"> only cycles <span id="count-cycles"></span></label>
-        <h2>Focus</h2>
-        <label class="control">depth
-          <select id="focus-depth">
-            <option value="1">1</option>
-            <option value="2" selected>2</option>
-            <option value="3">3</option>
-          </select>
-        </label>
-        <label class="control">direction
-          <select id="focus-dir">
-            <option value="both">both</option>
-            <option value="out">what it uses</option>
-            <option value="in">what uses it</option>
-          </select>
-        </label>
+        <section class="sec" data-sec="types">
+          <div class="sh-row">
+            <button type="button" class="sh" aria-expanded="true"><svg class="ic chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>File types<span id="types-summary" class="n"></span></button>
+            <span class="bulk"><button type="button" class="btn quiet xs" data-bulk="types-all">All</button><button type="button" class="btn quiet xs" data-bulk="types-none">None</button></span>
+          </div>
+          <div id="type-filters" class="sec-body"></div>
+        </section>
+
+        <section class="sec" data-sec="relations">
+          <div class="sh-row">
+            <button type="button" class="sh" aria-expanded="true"><svg class="ic chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>Relations<span id="rels-summary" class="n"></span></button>
+            <span class="bulk"><button type="button" class="btn quiet xs" data-bulk="rels-all">All</button><button type="button" class="btn quiet xs" data-bulk="rels-none">None</button></span>
+          </div>
+          <div id="rel-filters" class="sec-body"></div>
+        </section>
+
+        <section class="sec" data-sec="show">
+          <div class="sh-row">
+            <button type="button" class="sh" aria-expanded="true"><svg class="ic chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>Show only</button>
+          </div>
+          <div class="sec-body">
+            <label class="row"><input class="chk" type="checkbox" id="only-orphans"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="var(--ink-3)" stroke-width="1.4"/></svg>Orphans<span id="count-orphans" class="n"></span></label>
+            <label class="row"><input class="chk" type="checkbox" id="only-risk"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="#d03b3b"/></svg>High risk<span id="count-risk" class="n"></span></label>
+            <label class="row"><input class="chk" type="checkbox" id="only-missing"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4.3" fill="none" stroke="#d03b3b" stroke-width="1.4" stroke-dasharray="2 2"/></svg>Missing files<span id="count-missing" class="n"></span></label>
+            <label class="row"><input class="chk" type="checkbox" id="only-cycles"><svg width="12" height="12" aria-hidden="true"><path d="M2 6a4 4 0 0 1 7-2.6M10 6a4 4 0 0 1-7 2.6" fill="none" stroke="#d03b3b" stroke-width="1.5" stroke-linecap="round"/></svg>In a cycle<span id="count-cycles" class="n"></span></label>
+          </div>
+        </section>
+
+        <section class="sec" data-sec="focus">
+          <div class="sh-row">
+            <button type="button" class="sh" aria-expanded="false"><svg class="ic chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>Focus<span id="focus-summary" class="n"></span></button>
+          </div>
+          <div class="sec-body focus-body">
+            <div class="ctl">Depth<div id="focus-depth" class="seg" role="radiogroup" aria-label="Focus depth">
+              <button type="button" role="radio" data-value="1">1</button>
+              <button type="button" role="radio" data-value="2">2</button>
+              <button type="button" role="radio" data-value="3">3</button>
+            </div></div>
+            <div id="focus-dir" class="seg" role="radiogroup" aria-label="Focus direction">
+              <button type="button" role="radio" data-value="both">Both</button>
+              <button type="button" role="radio" data-value="out">Uses</button>
+              <button type="button" role="radio" data-value="in">Used by</button>
+            </div>
+            <p class="hint">Applies when a file is focused with “Focus on this file”.</p>
+          </div>
+        </section>
       </div>
     </aside>
 
     <div id="canvas-wrap">
       <div id="graph"></div>
-      <div id="perf-banner" hidden></div>
-      <section id="issues" hidden>
+
+      <div id="layout-seg" class="seg over" role="radiogroup" aria-label="Layout">
+        <button type="button" role="radio" data-mode="galaxy">Galaxy <span class="kbd">G</span></button>
+        <button type="button" role="radio" data-mode="tree">Tree <span class="kbd">T</span></button>
+      </div>
+
+      <div id="perf-banner" class="over banner" role="status" hidden>
+        <span id="perf-text"></span>
+        <button id="perf-ungroup" type="button" class="btn quiet xs accent" hidden>Ungroup</button>
+        <button id="perf-dismiss" type="button" class="btn quiet sq xs" aria-label="Dismiss">
+          <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        </button>
+      </div>
+
+      <div id="path-banner" class="over banner" role="status" hidden>
+        <span id="path-label" class="dim3">Path</span>
+        <span id="path-steps" class="mono"></span>
+        <span id="path-hops" class="dim2"></span>
+        <button id="path-clear" type="button" class="btn quiet xs">Clear <span class="kbd">Esc</span></button>
+      </div>
+
+      <p id="shift-hint" class="over" hidden><span class="kbd">Shift</span>-click another file to trace the path to it</p>
+
+      <div id="zoom-ctl" class="over">
+        <button id="zoom-in" type="button" class="btn quiet sq" aria-label="Zoom in" title="Zoom in"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>
+        <button id="zoom-out" type="button" class="btn quiet sq" aria-label="Zoom out" title="Zoom out"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"/></svg></button>
+        <button id="zoom-fit" type="button" class="btn quiet sq" aria-label="Fit graph to screen (F)" title="Fit graph to screen (F)"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg></button>
+      </div>
+
+      <section id="issues" class="over" aria-labelledby="issues-title" hidden>
         <header>
-          <span id="issues-title">Issues</span>
-          <button id="issues-close" aria-label="close">✕</button>
+          <h2 id="issues-title">Issues</h2>
+          <span id="issues-count" class="mono dim3"></span>
+          <span id="issues-summary" class="dim3"></span>
+          <button id="issues-close" type="button" class="btn quiet sq" aria-label="Close issues (I)">
+            <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+          </button>
         </header>
         <div id="issues-body"></div>
       </section>
+
+      <div id="state-card" role="status">
+        <div id="state-loading">
+          <div class="state-title">Opening project</div>
+          <ul class="steps">
+            <li><span id="step-read" class="mono step-mark">····</span>Read graph.json<span id="step-read-n" class="n"></span></li>
+            <li><span id="step-place" class="mono step-mark dim3">····</span>Placing nodes</li>
+          </ul>
+          <p class="hint">Graphs over 1,200 files open grouped by folder.</p>
+        </div>
+        <div id="state-empty" hidden>
+          <div class="state-title lg">No graph to show yet</div>
+          <p>There is no <span class="mono">.nervegraph/graph.json</span> for this project. Scan the project, then reload this page.</p>
+          <div class="cmd"><code class="mono">npx nervegraph@latest scan</code><button id="copy-scan" type="button" class="btn quiet xs">Copy</button></div>
+          <p class="hint">Add <span class="mono">--watch</span> to rescan on save. This page reloads by itself after each scan.</p>
+          <div><button id="state-reload" type="button" class="btn">Reload</button></div>
+        </div>
+        <div id="state-error" hidden>
+          <div class="state-title lg" id="state-error-title">Could not load the graph</div>
+          <p id="state-error-text" class="mono"></p>
+          <div><button id="state-error-reload" type="button" class="btn">Reload</button></div>
+        </div>
+      </div>
     </div>
 
-    <aside id="details">
-      <button id="details-close" aria-label="close">✕</button>
-      <div id="details-body"><p class="hint">Click a node to see its details.</p></div>
+    <aside id="details" aria-label="Details">
+      <div id="overview">
+        <div class="pad">
+          <h2 id="ov-name" class="title"></h2>
+          <div class="dim3 small">Nothing selected. Search with <span class="kbd">/</span> or click a file.</div>
+        </div>
+        <dl id="ov-stats"></dl>
+        <h3 class="h pad-h" id="ov-entry-title">Entrypoints</h3>
+        <div id="ov-entry" class="list"></div>
+        <h3 class="h pad-h" id="ov-hubs-title">Most depended on</h3>
+        <div id="ov-hubs" class="list"></div>
+        <h3 class="h pad-h">Reading the map</h3>
+        <ul class="legend-list">
+          <li><svg width="28" height="16" aria-hidden="true"><circle cx="14" cy="8" r="5" fill="#199e70"/></svg>A file. Bigger means more files depend on it</li>
+          <li><svg width="28" height="16" aria-hidden="true"><rect x="8" y="2" width="12" height="12" rx="3" fill="#3987e5"/></svg>A folder, with its file count</li>
+          <li><svg width="28" height="16" aria-hidden="true"><circle cx="14" cy="8" r="3.6" fill="#d95926"/><circle cx="14" cy="8" r="6.6" fill="none" stroke="#d95926"/></svg>Ring: entrypoint</li>
+          <li><svg width="28" height="16" aria-hidden="true"><circle cx="14" cy="8" r="5" fill="none" stroke="#d03b3b" stroke-width="1.5" stroke-dasharray="2 2"/></svg>Dashed outline: referenced, but not on disk</li>
+          <li><svg width="28" height="16" aria-hidden="true"><path d="M2 8H26" stroke="#8c96ab" stroke-width="1.6"/></svg>Solid line: render, include, section</li>
+          <li><svg width="28" height="16" aria-hidden="true"><path d="M2 8H26" stroke="#8c96ab" stroke-width="1.6" stroke-dasharray="3 2"/></svg>Dashed line: code import</li>
+          <li><svg width="28" height="16" aria-hidden="true"><path d="M2 8H26" stroke="#d03b3b" stroke-width="2"/></svg>Red line: part of a cycle</li>
+        </ul>
+      </div>
+      <div id="details-body" hidden></div>
     </aside>
   </main>
 
   <footer id="statusbar">
-    <span id="mode-indicator">galaxy</span>
+    <span id="mode-indicator">Galaxy</span>
     <span id="status-mid"></span>
-    <button id="issues-btn" type="button"></button>
+    <span id="watch-status" hidden><span class="dot" aria-hidden="true"></span>Watching, reloads on rescan</span>
+    <button id="issues-btn" type="button" class="btn quiet xs" aria-pressed="false"></button>
     <span id="status-right"></span>
   </footer>
 
   <div id="help" hidden>
-    <div class="help-card">
-      <h3>Keyboard</h3>
+    <div class="help-card over" role="dialog" aria-label="Keyboard shortcuts">
+      <h3 class="h">Keyboard</h3>
       <ul>
-        <li><kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd> — search</li>
-        <li><kbd>f</kbd> — fit graph to screen</li>
-        <li><kbd>g</kbd> / <kbd>t</kbd> — galaxy ↔ tree layout</li>
-        <li><kbd>i</kbd> — issues panel (unresolved refs and cycles)</li>
-        <li><kbd>c</kbd> — cycle through color-by modes</li>
-        <li><kbd>Esc</kbd> — clear selection</li>
-        <li><kbd>?</kbd> — this card</li>
+        <li><span><span class="kbd">/</span> or <span class="kbd">Ctrl</span> <span class="kbd">K</span></span>Search</li>
+        <li><span class="kbd">F</span>Fit graph to screen</li>
+        <li><span><span class="kbd">G</span> <span class="kbd">T</span></span>Galaxy or tree layout</li>
+        <li><span class="kbd">I</span>Issues panel</li>
+        <li><span class="kbd">C</span>Next color-by mode</li>
+        <li><span class="kbd">Esc</span>Clear path, then selection</li>
+        <li><span class="kbd">?</span>This card</li>
       </ul>
-      <h3>Mouse</h3>
+      <h3 class="h">Mouse</h3>
       <ul>
-        <li>click — select a file</li>
-        <li><kbd>Shift</kbd>+click — shortest path from the selected file</li>
-        <li>drag — pin a node where you drop it</li>
-      </ul>
-      <h3>Reading the graph</h3>
-      <ul>
-        <li>ring around a node — entrypoint</li>
-        <li>dashed outline — referenced but missing on disk</li>
-        <li>dashed line — code import; solid — structural inclusion</li>
-        <li>red line — part of a dependency cycle</li>
+        <li><span>Click</span>Select a file, or open a folder</li>
+        <li><span><span class="kbd">Shift</span> click</span>Shortest path from the selected file</li>
+        <li><span>Drag</span>Pin a node where you drop it</li>
       </ul>
     </div>
   </div>

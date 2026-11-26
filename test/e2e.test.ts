@@ -57,6 +57,8 @@ test('scan → query → view works end to end', async (t) => {
       assert.equal((await get('/')).status, 200);
       // A cache-busting query string must not miss the allowlist (0.3.1 bug).
       assert.equal((await get('/app.css?v=2')).status, 200);
+      // A cached app.js from the previous version would not match the new index.html.
+      assert.equal((await get('/app.js')).headers.get('cache-control'), 'no-cache');
       assert.equal((await (await get('/graph.json')).json() as any).schemaVersion, graph.schemaVersion);
       assert.equal((await get('/../package.json')).status, 404);
       assert.equal((await get('/etc/passwd')).status, 404);

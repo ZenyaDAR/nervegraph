@@ -2,6 +2,99 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioning per [SemVer](https://semver.org/).
 
+## [0.6.0] — 2026-11-26
+
+Found by checking the graphs of five real Shopify themes against their sources:
+on Horizon-style themes about a third of the links were missing, silently.
+`graph.json` stays on schema 4; new edge `value`s are `schema_block` and
+`section_api`.
+
+### Added
+- **Import maps** — `<script type="importmap">` entries (Liquid `asset_url` or
+  plain URLs) resolve bare imports such as `@theme/component`.
+- **Nested `tsconfig.json` / `jsconfig.json`** — `paths` and `baseUrl` apply to
+  files under that directory, the deepest config first.
+- **`{% schema %}` blocks** — theme blocks named in `blocks`, `presets` and
+  `default` become edges. Not counted as dependency cycles.
+- **`inline_asset_content`**, and asset / `t` filters in any tag.
+- **Section Rendering API** — a section fetched by id gets an edge.
+- Imports and `customElements.define()` in inline Liquid scripts and
+  `{% javascript %}`.
+
+- **For agents: one call answers "what does this change affect".** The query
+  card adds `indirectDependents` (every non-direct dependent, grouped by node
+  type, capped per type) and `affectedByType`. Measured with headless Claude on
+  the Horizon theme: with the MCP server connected, agents called it in 1 of 11
+  runs before and 16 of 16 after; on the two impact questions it took 2 turns
+  instead of 4–9, and 24% and 62% of the tokens, and found two sections grep
+  missed. See "With and without nervegraph" in the README.
+- **MCP:** server `instructions` (when to prefer the graph over grep, and what
+  it cannot see), tool descriptions that lead with the question they answer,
+  `readOnlyHint` and titles on every tool, `nervegraph_query` loaded with the
+  session (`anthropic/alwaysLoad`), protocol version negotiation (2024-11-05 to
+  2025-11-25), and the project taken from `CLAUDE_PROJECT_DIR` when set.
+- **CLI autoscan (behaviour change):** `query`, `query --changed`, `overview`
+  and `agents-md` scan when there is no graph and re-scan when files changed,
+  as the MCP server already did; `--no-autoscan` turns it off. A re-scan reuses
+  the flags of the scan it replaces (`--ignore`, `--no-gitignore`, `--no-git`,
+  `--classes`, `--pretty`, now recorded in `graph.json` under `scan`). The
+  check costs about 0.85 s on 30k files: stats run in parallel, and the full
+  walk for new files runs only when a directory changed.
+- Every command finds the nearest `.nervegraph/graph.json` from the working
+  directory up to the repository root, so a command run from a subdirectory
+  reads (or creates) the project's graph. Outside a repository only the
+  working directory is looked at.
+- A file lookup that matches nothing answers with the directory's files or the
+  closest names; `--symbol` for an unknown name says what is not tracked and
+  suggests near-miss exports.
+
+### Changed
+- **Viewer redesign.** A project overview when nothing is selected; for a file,
+  its risk and an impact bar (every file a change can reach, by type), and
+  Used by / Uses rows that show the source line creating each link. A traced
+  path lists each step with its line. Collapsible filter sections with All /
+  None, a collapsible filter rail, Auto / Dark / Light theme control, zoom and
+  fit buttons, a loading screen, a "no graph.json yet" screen with the scan
+  command, a live-reload indicator, keyboard navigation in search, and a bottom
+  sheet on narrow screens. Category colours are unchanged; light-theme muted
+  text is darker (`#6b6964`) to pass AA.
+- README, `mcp --help` and the `agents-md` snippet say `npx nervegraph@latest`: a bare
+  `npx nervegraph` runs an older local or global install when there is one.
+- **Breaking for scripts:** `query --unresolved` / `kind: unresolved` lists
+  only the genuine ones; external references are counted, and listed with
+  `--all`. On a real project they were 99% of the answer.
+- `overview` leaves locale and config files out of entrypoints and hubs, and
+  lists a theme's layouts and templates before its sections.
+- The `agents-md` snippet says when to ask the graph instead of grepping.
+
+### Fixed
+- `nerve view` serves its files with `Cache-Control: no-cache`: after an
+  upgrade the browser could run a cached `app.js` against the new `index.html`.
+- Shopify sections and public theme blocks with `presets` are no longer
+  orphans: a merchant places them in the theme editor, so deleting them breaks
+  live pages. On Horizon this was 17 of 28 "unreferenced code" files.
+- `.d.ts` declaration files are config, not orphan code (4 more on Horizon).
+- A graph at `<dir>/.nervegraph/` that was copied or committed into a second
+  checkout or worktree belongs to `<dir>`: it used to read and re-scan the
+  checkout recorded in `root`.
+- A file dated in the future no longer makes the graph stale on every call.
+- A JSON block its section defines locally no longer links to the theme block
+  of the same name.
+- `{{- 'x' | asset_url }}` / `{{- 'x' | t -}}` were skipped, and a `%` inside tag
+  arguments (`width: '100%'`) dropped the whole tag.
+- False missing files: `assets/x.svg.liquid`, files over 2 MB, `url(#id)` inside
+  a `data:` SVG, `require()` inside a theme's JS bundle, the platform `apps`
+  section.
+- A file added since the scan, or an edited `.gitignore`, now makes the graph stale.
+- Shopify `config/*.json`, `sections/apps.liquid` and `sections/_blocks.liquid`
+  are entrypoints, not orphans.
+- Comments with a label (`{% comment foo %}`), `{% # … %}` and comments inside
+  `{% liquid %}` no longer produce edges.
+- `.DS_Store`, `Thumbs.db`, `.gitignore`, `.gitattributes`, `.claude/settings*.json`
+  and `.claude/worktrees/` are not scanned.
+- Line numbers are counted incrementally: a 512 KB file with thousands of matches
+  took 10–30 s.
+
 ## [0.5.0] — 2026-11-10
 
 Agent-facing: answers small enough for a context window, and the questions an

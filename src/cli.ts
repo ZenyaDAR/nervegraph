@@ -124,7 +124,7 @@ const COMMANDS: Record<string, Command> = {
   --changed           git changes, their dependents and the tests to run
   --base <ref>        with --changed: also include changes since this ref
   --orphans           list unreferenced code files (--all adds tests, docs, config, …)
-  --all               with --orphans: every kind
+  --all               with --orphans: every kind; with --unresolved: external ones too
   --fields <a,b>      list modes: keep only these row fields
   --missing           list referenced files that are not on disk
   --unresolved        list references static analysis could not follow
@@ -133,7 +133,8 @@ const COMMANDS: Record<string, Command> = {
   --packages          fold the graph up to one node per package
   --duplicates        list groups of byte-identical files
   --cycles            list dependency cycles
-  --graph <path>       default .nervegraph/graph.json`,
+  --graph <path>       default: the nearest .nervegraph/graph.json
+  --no-autoscan       never re-scan; by default a missing or stale graph is re-scanned first`,
     options: {
       json: { type: 'boolean' },
       pretty: { type: 'boolean' },
@@ -156,6 +157,7 @@ const COMMANDS: Record<string, Command> = {
       duplicates: { type: 'boolean' },
       cycles: { type: 'boolean' },
       graph: { type: 'string' },
+      'no-autoscan': { type: 'boolean' },
     },
     run: (v, positionals) => {
       const risk = str(v.risk);
@@ -168,7 +170,7 @@ const COMMANDS: Record<string, Command> = {
       }
       if (v.base !== undefined && !v.changed) throw new UsageError('--base only applies with --changed');
       if (v.changed) {
-        return runChanged({ graph: str(v.graph), base: str(v.base), json: bool(v.json), pretty: bool(v.pretty), limit: int('limit', v.limit) });
+        return runChanged({ graph: str(v.graph), base: str(v.base), json: bool(v.json), pretty: bool(v.pretty), limit: int('limit', v.limit), noAutoscan: bool(v['no-autoscan']) });
       }
       return runQuery({
         file: positionals[0],
@@ -191,6 +193,7 @@ const COMMANDS: Record<string, Command> = {
         duplicates: bool(v.duplicates),
         cycles: bool(v.cycles),
         graph: str(v.graph),
+        noAutoscan: bool(v['no-autoscan']),
       });
     },
   },
@@ -278,7 +281,7 @@ const COMMANDS: Record<string, Command> = {
     notes: `
   Speaks JSON-RPC 2.0 on stdin/stdout; tools: nervegraph_overview, nervegraph_query,
   nervegraph_symbol, nervegraph_changed, nervegraph_list.
-  Register it: { "command": "npx", "args": ["nervegraph", "mcp"] }`,
+  Register it: { "command": "npx", "args": ["-y", "nervegraph@latest", "mcp"] }`,
     options: { graph: { type: 'string' }, 'no-autoscan': { type: 'boolean' } },
     run: (v) => runMcp({ graph: str(v.graph), noAutoscan: bool(v['no-autoscan']) }),
   },
@@ -289,20 +292,22 @@ const COMMANDS: Record<string, Command> = {
     flags: `
   --json              machine-readable (one line, ~1 KB)
   --pretty            indent the JSON
-  --graph <path>       default .nervegraph/graph.json`,
-    options: { json: { type: 'boolean' }, pretty: { type: 'boolean' }, graph: { type: 'string' } },
-    run: (v) => runOverview({ json: bool(v.json), pretty: bool(v.pretty), graph: str(v.graph) }),
+  --graph <path>       default: the nearest .nervegraph/graph.json
+  --no-autoscan       never re-scan; by default a missing or stale graph is re-scanned first`,
+    options: { json: { type: 'boolean' }, pretty: { type: 'boolean' }, graph: { type: 'string' }, 'no-autoscan': { type: 'boolean' } },
+    run: (v) => runOverview({ json: bool(v.json), pretty: bool(v.pretty), graph: str(v.graph), noAutoscan: bool(v['no-autoscan']) }),
   },
 
   'agents-md': {
     usage: 'nerve agents-md      [flags]',
     summary: 'A snippet for CLAUDE.md / AGENTS.md',
     flags: `
-  --graph <path>       default .nervegraph/graph.json`,
+  --graph <path>       default: the nearest .nervegraph/graph.json
+  --no-autoscan       never re-scan; by default a missing or stale graph is re-scanned first`,
     notes: `
   Append it: nerve agents-md >> CLAUDE.md`,
-    options: { graph: { type: 'string' } },
-    run: (v) => runAgentsMd({ graph: str(v.graph) }),
+    options: { graph: { type: 'string' }, 'no-autoscan': { type: 'boolean' } },
+    run: (v) => runAgentsMd({ graph: str(v.graph), noAutoscan: bool(v['no-autoscan']) }),
   },
 };
 

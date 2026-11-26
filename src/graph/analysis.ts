@@ -16,7 +16,8 @@ const FIXTURE_PATH = /(^|\/)(fixtures?|__fixtures__|__mocks__|__snapshots__|test
 const TEST_PATH = /(^|\/)(tests?|__tests__|specs?)\/|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$|_test\.(go|py)$|_spec\.rb$|(Tests?|IT)\.(java|kt|cs)$/;
 const DOC_PATH = /\.(md|mdx|markdown|rst|txt|adoc)$|(^|\/)(docs?|documentation)\/|(^|\/)(README|LICENSE|LICENCE|CHANGELOG|CONTRIBUTING|AUTHORS|NOTICE|SECURITY|CODE_OF_CONDUCT)(\.[^/]*)?$/i;
 const ASSET_PATH = /\.(png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|mov|mp3|wav|ogg|pdf|zip)$/i;
-const CONFIG_PATH = /(^|\/)\.[^/]+$|\.(json|jsonc|json5|ya?ml|toml|ini|cfg|conf|lock|env|properties)$|(^|\/)[^/]+\.config\.[^/]+$|(^|\/)(Dockerfile|Makefile|Procfile|Gemfile|Rakefile|go\.sum)$|(^|\/)config\//i;
+// .d.ts: ambient declarations the compiler loads by config, never imported.
+const CONFIG_PATH = /\.d\.[cm]?ts$|(^|\/)\.[^/]+$|\.(json|jsonc|json5|ya?ml|toml|ini|cfg|conf|lock|env|properties)$|(^|\/)[^/]+\.config\.[^/]+$|(^|\/)(Dockerfile|Makefile|Procfile|Gemfile|Rakefile|go\.sum)$|(^|\/)config\//i;
 const ENTRY_PATH = /(^|\/)(bin|scripts?|cmd|tools|examples?)\/|(^|\/)(cli|server|app|main|index|run|manage|setup|start|worker|bootstrap)\.[^./]+$/;
 
 /** A test file (not a fixture a test reads): `test/`, `*.test.*`, `test_*.py`, `*_test.go`, `*_spec.rb`, … */

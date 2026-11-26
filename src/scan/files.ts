@@ -2,7 +2,7 @@ import fg from 'fast-glob';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { TEXT_EXT } from './extensions.ts';
 
@@ -15,7 +15,12 @@ const NEVER_LIST = [
   '**/.nervegraph/**', '**/coverage/**', '**/.next/**', '**/.nuxt/**',
 ];
 // Listed (so imports of them resolve) but never scanned.
-const LIST_ONLY = ['**/dist/**', '**/build/**', '**/*.min.js', '**/*.min.css', '**/vendor/**'];
+const LIST_ONLY = [
+  '**/dist/**', '**/build/**', '**/*.min.js', '**/*.min.css', '**/vendor/**',
+  // Tool and OS metadata, never part of the project's structure.
+  '**/.DS_Store', '**/Thumbs.db', '**/.gitignore', '**/.gitattributes',
+  '**/.claude/worktrees/**', '**/.claude/settings*.json',
+];
 const ALWAYS_IGNORE = [...NEVER_LIST, ...LIST_ONLY];
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
@@ -41,12 +46,23 @@ function toPosix(p: string): string {
   return p.split(path.sep).join('/');
 }
 
-export async function collectFiles(root: string, opts: {
+export interface ListOptions {
   extraIgnore?: string[];
   noGitignore?: boolean;
-} = {}): Promise<FilesResult> {
+  /** Don't descend into ignored top-level directories; `ignored` is then incomplete. */
+  skipIgnoredDirs?: boolean;
+}
+
+/** Project file ids without reading them: the ones a scan covers, and the ignored rest. */
+export function listFiles(root: string, opts: ListOptions = {}): {
+  relevant: string[];
+  ignored: string[];
+  /** The .gitignore files in effect, minus those of ignored directories (tool caches). */
+  gitignores: string[];
+} {
   const ig = ignoreLib();
-  ig.add(ALWAYS_IGNORE.map(p => p.replace(/^\*\*\//, '').replace(/\/\*\*$/, '')));
+  // A pattern with an inner slash keeps its `**/`: without it, it matches at the root only.
+  ig.add(ALWAYS_IGNORE.map(p => p.replace(/\/\*\*$/, '')).map(p => p.replace(/^\*\*\/(?=[^/]+$)/, '')));
   // fast-glob drops NEVER_LIST; ignore lib moves LIST_ONLY, .gitignore and extra into `ignored`
   const ngi = path.join(root, '.nervegraphignore');
   if (existsSync(ngi)) {
@@ -54,16 +70,26 @@ export async function collectFiles(root: string, opts: {
   }
   if (opts.extraIgnore?.length) ig.add(opts.extraIgnore);
 
+  const skipped: string[] = [];
+  if (opts.skipIgnoredDirs) {
+    const rootIg = ignoreLib();
+    const gi = path.join(root, '.gitignore');
+    if (!opts.noGitignore && existsSync(gi) && statSync(gi).isFile()) rootIg.add(readFileSync(gi, 'utf8'));
+    for (const e of readdirSync(root, { withFileTypes: true })) {
+      if (e.isDirectory() && (ig.ignores(`${e.name}/`) || rootIg.ignores(`${e.name}/`))) skipped.push(`${fg.escapePath(e.name)}/**`);
+    }
+  }
+
   // Dotted paths are real project files (.storybook/main.ts, .config.js);
   // only the always-ignored ones (.git, .next, …) are skipped.
-  const entries = (await fg('**/*', {
+  const entries = fg.sync('**/*', {
     cwd: root,
-    ignore: NEVER_LIST,
+    ignore: [...NEVER_LIST, ...skipped],
     onlyFiles: true,
     dot: true,
     followSymbolicLinks: false,
     absolute: false,
-  })).sort();
+  }).sort();
 
   // Every .gitignore applies to its own directory and below, with patterns
   // relative to that directory — not only the root one.
@@ -77,14 +103,23 @@ export async function collectFiles(root: string, opts: {
       gitignores.push({ dir, ig: gi });
     }
   }
-  const isIgnored = (e: string) =>
-    ig.ignores(e) || gitignores.some(g => e.startsWith(g.dir) && g.ig.ignores(e.slice(g.dir.length)));
+  const byGit = (e: string) => gitignores.some(g => e.startsWith(g.dir) && g.ig.ignores(e.slice(g.dir.length)));
+  const isIgnored = (e: string) => ig.ignores(e) || byGit(e);
 
   const relevant: string[] = [];
   // Ignored files are not scanned, but they are on disk: an import of a
   // gitignored generated file must not become a "missing" node.
   const ignored: string[] = [];
   for (const e of entries) (isIgnored(e) ? ignored : relevant).push(e);
+  return {
+    relevant,
+    ignored: ignored.map(toPosix),
+    gitignores: gitignores.filter(g => !(g.dir && ig.ignores(g.dir))).map(g => `${g.dir}.gitignore`).filter(e => e === '.gitignore' || !byGit(e)),
+  };
+}
+
+export async function collectFiles(root: string, opts: ListOptions = {}): Promise<FilesResult> {
+  const { relevant, ignored } = listFiles(root, opts);
 
   const files: ScannedFile[] = [];
   const tooLarge: string[] = [];
@@ -101,13 +136,14 @@ export async function collectFiles(root: string, opts: {
       const absPath = path.join(root, rel);
       try {
         const st = await stat(absPath);
-        if (st.size > MAX_FILE_SIZE) {
-          tooLarge.push(id);
-          continue;
-        }
         const ext = path.extname(rel).toLowerCase();
         if (!TEXT_EXT.has(ext)) {
           binaryLeaves.push({ id, size: st.size, mtime: st.mtimeMs });
+          continue;
+        }
+        // Only text is read into memory; a large video is just a leaf.
+        if (st.size > MAX_FILE_SIZE) {
+          tooLarge.push(id);
           continue;
         }
         let content = await readFile(absPath, 'utf8');
@@ -129,7 +165,7 @@ export async function collectFiles(root: string, opts: {
   readErrors.sort((a, b) => byId(a.file, b.file));
   tooLarge.sort(byId);
 
-  return { files, tooLarge, readErrors, binaryLeaves, ignored: ignored.map(toPosix) };
+  return { files, tooLarge, readErrors, binaryLeaves, ignored };
 }
 
 export function hashContent(content: string): string {
